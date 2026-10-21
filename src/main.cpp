@@ -1,0 +1,3663 @@
+/*
+ * ================================================================
+ * SAMBA CONTROL CENTER
+ * ================================================================
+ *
+ * GUI GTKmm 4 para MX Linux / Debian
+ *
+ * SysVinit
+ *
+ * Funciones:
+ *
+ *  - Verificación de Samba
+ *  - Verificación de dependencias
+ *  - Creación de /home/$USER/Red
+ *  - Permisos
+ *  - Configuración smb.conf
+ *  - backup de smb.conf
+ *  - testparm
+ *  - usuario Samba
+ *  - contraseña Samba
+ *  - smbd / nmbd
+ *  - UFW
+ *  - puertos 139 / 445
+ *  - interfaces de red
+ *  - rutas
+ *  - ARP / neighbours
+ *  - ping
+ *  - prueba TCP 445
+ *  - smbclient
+ *  - tcpdump
+ *
+ * Compatible con:
+ *
+ *  MX Linux / Debian
+ *  GTKmm 4
+ *  C++17
+ *  SysVinit
+ *
+ * ================================================================
+ */
+
+#include <gtkmm.h>
+
+#include <array>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <unistd.h>
+#include <sys/wait.h>
+
+namespace fs = std::filesystem;
+
+
+/*
+ * ================================================================
+ * UTILIDADES
+ * ================================================================
+ */
+
+static std::string trim(const std::string& input)
+{
+    const char* whitespace = " \t\n\r\f\v";
+
+    const auto begin =
+        input.find_first_not_of(whitespace);
+
+    if (begin == std::string::npos)
+        return "";
+
+    const auto end =
+        input.find_last_not_of(whitespace);
+
+    return input.substr(
+        begin,
+        end - begin + 1
+    );
+}
+
+
+/*
+ * Escapa una cadena para utilizarla como argumento
+ * dentro de una orden shell.
+ */
+static std::string shell_escape(
+    const std::string& value)
+{
+    std::string result = "'";
+
+    for (char c : value)
+    {
+        if (c == '\'')
+            result += "'\\''";
+        else
+            result += c;
+    }
+
+    result += "'";
+
+    return result;
+}
+
+
+/*
+ * Ejecuta una orden y devuelve stdout + stderr.
+ */
+static std::string execute_command(
+    const std::string& command,
+    int* exit_code = nullptr)
+{
+    std::array<char, 4096> buffer{};
+
+    std::string result;
+
+    const std::string full_command =
+        command + " 2>&1";
+
+    FILE* pipe =
+        popen(
+            full_command.c_str(),
+            "r"
+        );
+
+    if (!pipe)
+    {
+        if (exit_code)
+            *exit_code = -1;
+
+        return
+            "ERROR: no fue posible ejecutar el comando.\n";
+    }
+
+    while (
+        fgets(
+            buffer.data(),
+            static_cast<int>(buffer.size()),
+            pipe
+        )
+    )
+    {
+        result += buffer.data();
+    }
+
+    const int status =
+        pclose(pipe);
+
+    if (exit_code)
+    {
+        if (WIFEXITED(status))
+            *exit_code =
+                WEXITSTATUS(status);
+        else
+            *exit_code = -1;
+    }
+
+    return result;
+}
+
+
+static bool command_exists(
+    const std::string& command)
+{
+    const std::string cmd =
+        "command -v " +
+        shell_escape(command) +
+        " >/dev/null 2>&1";
+
+    return std::system(
+        cmd.c_str()
+    ) == 0;
+}
+
+
+static std::string get_command_output(
+    const std::string& command)
+{
+    return trim(
+        execute_command(command)
+    );
+}
+
+
+static std::string current_user()
+{
+    const char* user =
+        std::getenv("USER");
+
+    if (user && *user)
+        return user;
+
+    return get_command_output(
+        "id -un"
+    );
+}
+
+
+static std::string home_directory()
+{
+    const char* home =
+        std::getenv("HOME");
+
+    if (home && *home)
+        return home;
+
+    const std::string user =
+        current_user();
+
+    const std::string from_getent =
+        get_command_output(
+            "getent passwd " +
+            shell_escape(user) +
+            " | cut -d: -f6"
+        );
+
+    if (!from_getent.empty())
+        return from_getent;
+
+    return "/home/" + user;
+}
+
+
+/*
+ * ================================================================
+ * CLASE PRINCIPAL
+ * ================================================================
+ */
+
+class SambaControlCenter :
+    public Gtk::ApplicationWindow
+{
+public:
+
+    SambaControlCenter();
+
+private:
+
+    /*
+     * ------------------------------------------------------------
+     * WIDGETS
+     * ------------------------------------------------------------
+     */
+
+    Gtk::Box main_box{
+        Gtk::Orientation::VERTICAL
+    };
+
+    Gtk::Box header_box{
+        Gtk::Orientation::HORIZONTAL
+    };
+
+    Gtk::Label title_label;
+
+    Gtk::Label status_label;
+
+    Gtk::ScrolledWindow log_scroll;
+
+    Gtk::TextView log_view;
+
+    Glib::RefPtr<Gtk::TextBuffer>
+        log_buffer;
+
+    Gtk::Grid status_grid;
+
+    Gtk::Label samba_status;
+    Gtk::Label tcpdump_status;
+    Gtk::Label folder_status;
+    Gtk::Label smbd_status;
+    Gtk::Label nmbd_status;
+    Gtk::Label firewall_status;
+    Gtk::Label ports_status;
+    Gtk::Label network_status;
+
+    Gtk::Button btn_install;
+    Gtk::Button btn_configure;
+    Gtk::Button btn_password;
+    Gtk::Button btn_restart;
+    Gtk::Button btn_firewall;
+    Gtk::Button btn_ports;
+    Gtk::Button btn_network;
+    Gtk::Button btn_interfaces;
+    Gtk::Button btn_routes;
+    Gtk::Button btn_gateway;
+    Gtk::Button btn_neighbors;
+    Gtk::Button btn_windows;
+    Gtk::Button btn_tcp445;
+    Gtk::Button btn_ping;
+    Gtk::Button btn_smbclient;
+    Gtk::Button btn_tcpdump;
+    Gtk::Button btn_diagnose;
+    Gtk::Button btn_clear;
+
+    /*
+     * ------------------------------------------------------------
+     * CONFIGURACIÓN
+     * ------------------------------------------------------------
+     */
+
+    const std::string samba_config =
+        "/etc/samba/smb.conf";
+
+    std::string shared_folder;
+    std::string samba_user;
+
+    /*
+     * ------------------------------------------------------------
+     * GUI
+     * ------------------------------------------------------------
+     */
+
+    void setup_ui();
+
+    void create_status_panel();
+
+    void configure_button(
+        Gtk::Button& button,
+        const std::string& text,
+        const std::string& tooltip
+    );
+
+    void append_log(
+        const std::string& text
+    );
+
+    void append_section(
+        const std::string& title
+    );
+
+    void set_status(
+        Gtk::Label& label,
+        const std::string& text,
+        bool good
+    );
+
+    void set_status_unknown(
+        Gtk::Label& label,
+        const std::string& text
+    );
+
+    /*
+     * ------------------------------------------------------------
+     * DEPENDENCIAS
+     * ------------------------------------------------------------
+     */
+
+    bool check_package(
+        const std::string& command,
+        const std::string& package
+    );
+
+    void check_dependencies();
+
+    void install_dependencies();
+
+    /*
+     * ------------------------------------------------------------
+     * SAMBA
+     * ------------------------------------------------------------
+     */
+
+    bool check_samba();
+
+    bool check_smbclient();
+
+    bool check_smbpasswd();
+
+    bool check_testparm();
+
+    void configure_samba();
+
+    void create_samba_config();
+
+    bool validate_samba_config();
+
+    void backup_samba_config();
+
+    /*
+     * ------------------------------------------------------------
+     * CARPETA
+     * ------------------------------------------------------------
+     */
+
+    bool folder_exists();
+
+    void create_shared_folder();
+
+    void fix_folder_permissions();
+
+    /*
+     * ------------------------------------------------------------
+     * USUARIO
+     * ------------------------------------------------------------
+     */
+
+    bool samba_user_exists();
+
+    void create_samba_user();
+
+    void show_password_dialog();
+
+    void set_samba_password(
+        const std::string& password
+    );
+
+    /*
+     * ------------------------------------------------------------
+     * SERVICIOS
+     * ------------------------------------------------------------
+     */
+
+    void restart_smbd();
+
+    void restart_nmbd();
+
+    void restart_services();
+
+    void check_services();
+
+    /*
+     * ------------------------------------------------------------
+     * FIREWALL
+     * ------------------------------------------------------------
+     */
+
+    void configure_firewall();
+
+    void check_firewall();
+
+    /*
+     * ------------------------------------------------------------
+     * RED
+     * ------------------------------------------------------------
+     */
+
+    void check_ports();
+
+    void show_interfaces();
+    void show_routes();
+    void show_gateway();
+    void show_windows_network();
+    void test_windows_tcp445();
+    void show_network();
+
+    void ping_windows();
+
+    void test_smb_port();
+
+    void show_routing();
+
+    void show_neighbors();
+
+    /*
+     * ------------------------------------------------------------
+     * SMB
+     * ------------------------------------------------------------
+     */
+
+    void test_smbclient();
+
+    /*
+     * ------------------------------------------------------------
+     * TCPDUMP
+     * ------------------------------------------------------------
+     */
+
+    void run_tcpdump_diagnostic();
+
+    /*
+     * ------------------------------------------------------------
+     * DIAGNÓSTICO
+     * ------------------------------------------------------------
+     */
+
+    void full_diagnostic();
+
+    void clear_log();
+
+    /*
+     * ------------------------------------------------------------
+     * ADMINISTRACIÓN
+     * ------------------------------------------------------------
+     */
+
+    std::string pkexec_command(
+        const std::string& command
+    );
+
+    bool run_admin_command(
+        const std::string& command,
+        std::string& output
+    );
+
+    /*
+     * ------------------------------------------------------------
+     * DIÁLOGOS GTK4
+     * ------------------------------------------------------------
+     */
+
+    int run_dialog_sync(
+        Gtk::Dialog& dialog
+    );
+
+    bool ask_install(
+        const std::string& package
+    );
+
+    bool ask_yes_no(
+        const std::string& title,
+        const std::string& message
+    );
+
+    void show_info(
+        const std::string& title,
+        const std::string& message
+    );
+
+    void show_error(
+        const std::string& title,
+        const std::string& message
+    );
+};
+
+
+/*
+ * ================================================================
+ * CONSTRUCTOR
+ * ================================================================
+ */
+
+SambaControlCenter::SambaControlCenter()
+{
+    shared_folder =
+        home_directory() +
+        "/Red";
+
+    samba_user =
+        current_user();
+
+    set_title(
+        "Samba Control Center - MX Linux"
+    );
+
+    set_default_size(
+        1100,
+        760
+    );
+
+    set_resizable(true);
+
+    setup_ui();
+
+    append_log(
+        "Samba Control Center iniciado."
+    );
+
+    append_log(
+        "Usuario: " +
+        samba_user
+    );
+
+    append_log(
+        "HOME: " +
+        home_directory()
+    );
+
+    append_log(
+        "Carpeta: " +
+        shared_folder
+    );
+
+    check_dependencies();
+    check_samba();
+    folder_exists();
+    check_services();
+    check_firewall();
+    check_ports();
+}
+
+
+/*
+ * ================================================================
+ * CONFIGURACIÓN DE LA INTERFAZ
+ * ================================================================
+ */
+
+void SambaControlCenter::setup_ui()
+{
+    /*
+     * ================================================================
+     * VENTANA PRINCIPAL
+     * ================================================================
+     */
+
+    set_child(main_box);
+
+    main_box.set_margin(15);
+    main_box.set_spacing(10);
+
+    /*
+     * ================================================================
+     * HEADER
+     * ================================================================
+     */
+
+    header_box.set_spacing(15);
+
+    title_label.set_markup(
+        "<span size='x-large' weight='bold'>"
+        "SAMBA CONTROL CENTER"
+        "</span>"
+    );
+
+    header_box.append(
+        title_label
+    );
+
+    status_label.set_text(
+        "MX Linux / Debian / SysVinit"
+    );
+
+    header_box.append(
+        status_label
+    );
+
+    main_box.append(
+        header_box
+    );
+
+    /*
+     * ================================================================
+     * PANEL DE ESTADO
+     * ================================================================
+     */
+
+    create_status_panel();
+
+    main_box.append(
+        status_grid
+    );
+
+    /*
+     * ================================================================
+     * BOTONERA
+     * ================================================================
+     */
+
+    auto* button_grid =
+        Gtk::make_managed<Gtk::Grid>();
+
+    button_grid->set_row_spacing(6);
+    button_grid->set_column_spacing(6);
+
+    /*
+     * ------------------------------------------------
+     * BOTONES PRINCIPALES
+     * ------------------------------------------------
+     */
+
+    configure_button(
+        btn_install,
+        "DEPENDENCIAS",
+        "Verificar e instalar dependencias"
+    );
+
+    configure_button(
+        btn_configure,
+        "CONFIGURAR SAMBA",
+        "Crear carpeta y configurar Samba"
+    );
+
+    configure_button(
+        btn_password,
+        "CONTRASEÑA SAMBA",
+        "Crear o cambiar contraseña Samba"
+    );
+
+    configure_button(
+        btn_restart,
+        "REINICIAR SERVICIOS",
+        "Reiniciar smbd y nmbd"
+    );
+
+    configure_button(
+        btn_firewall,
+        "FIREWALL UFW",
+        "Configurar firewall para Samba"
+    );
+
+    configure_button(
+        btn_ports,
+        "PUERTOS 139/445",
+        "Comprobar puertos Samba"
+    );
+
+    configure_button(
+        btn_network,
+        "RED / RUTAS",
+        "Mostrar interfaces, rutas y vecinos"
+    );
+
+    configure_button(
+        btn_ping,
+        "PING WINDOWS",
+        "Probar conectividad con Windows"
+    );
+
+    configure_button(
+        btn_smbclient,
+        "PRUEBA SMB",
+        "Probar smbclient"
+    );
+
+    configure_button(
+        btn_tcpdump,
+        "TCPDUMP",
+        "Diagnóstico de tráfico SMB"
+    );
+
+    configure_button(
+        btn_diagnose,
+        "DIAGNÓSTICO COMPLETO",
+        "Ejecutar diagnóstico completo"
+    );
+
+    configure_button(
+        btn_clear,
+        "LIMPIAR",
+        "Limpiar consola"
+    );
+
+    /*
+     * ------------------------------------------------
+     * DISTRIBUCIÓN DE BOTONES
+     * ------------------------------------------------
+     *
+     * 4 columnas x 3 filas
+     *
+     * Fila 0:
+     * DEPENDENCIAS
+     * CONFIGURAR SAMBA
+     * CONTRASEÑA SAMBA
+     * REINICIAR SERVICIOS
+     *
+     * Fila 1:
+     * FIREWALL
+     * PUERTOS
+     * RED
+     * PING
+     *
+     * Fila 2:
+     * SMBCLIENT
+     * TCPDUMP
+     * DIAGNÓSTICO
+     * LIMPIAR
+     *
+     */
+
+    button_grid->attach(
+        btn_install,
+        0,
+        0
+    );
+
+    button_grid->attach(
+        btn_configure,
+        1,
+        0
+    );
+
+    button_grid->attach(
+        btn_password,
+        2,
+        0
+    );
+
+    button_grid->attach(
+        btn_restart,
+        3,
+        0
+    );
+
+    button_grid->attach(
+        btn_firewall,
+        0,
+        1
+    );
+
+    button_grid->attach(
+        btn_ports,
+        1,
+        1
+    );
+
+    button_grid->attach(
+        btn_network,
+        2,
+        1
+    );
+
+    button_grid->attach(
+        btn_ping,
+        3,
+        1
+    );
+
+    button_grid->attach(
+        btn_smbclient,
+        0,
+        2
+    );
+
+    button_grid->attach(
+        btn_tcpdump,
+        1,
+        2
+    );
+
+    button_grid->attach(
+        btn_diagnose,
+        2,
+        2
+    );
+
+    button_grid->attach(
+        btn_clear,
+        3,
+        2
+    );
+
+    main_box.append(
+        *button_grid
+    );
+
+    /*
+     * ================================================================
+     * CONSOLA / LOG
+     * ================================================================
+     */
+
+    log_buffer =
+        Gtk::TextBuffer::create();
+
+    log_view.set_buffer(
+        log_buffer
+    );
+
+    log_view.set_editable(
+        false
+    );
+
+    log_view.set_cursor_visible(
+        false
+    );
+
+    log_view.set_monospace(
+        true
+    );
+
+    log_scroll.set_child(
+        log_view
+    );
+
+    log_scroll.set_vexpand(
+        true
+    );
+
+    main_box.append(
+        log_scroll
+    );
+
+    /*
+     * ================================================================
+     * SIGNALS
+     * ================================================================
+     *
+     * Cada botón se conecta UNA SOLA VEZ.
+     *
+     */
+
+    btn_install.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::check_dependencies
+        )
+    );
+
+    btn_configure.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::configure_samba
+        )
+    );
+
+    btn_password.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::show_password_dialog
+        )
+    );
+
+    btn_restart.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::restart_services
+        )
+    );
+
+    btn_firewall.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::configure_firewall
+        )
+    );
+
+    btn_ports.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::check_ports
+        )
+    );
+
+    btn_network.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::show_routing
+        )
+    );
+
+    btn_ping.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::ping_windows
+        )
+    );
+
+    btn_smbclient.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::test_smbclient
+        )
+    );
+
+    btn_tcpdump.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::run_tcpdump_diagnostic
+        )
+    );
+
+    btn_diagnose.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::full_diagnostic
+        )
+    );
+
+    btn_clear.signal_clicked().connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenter::clear_log
+        )
+    );
+}
+
+void SambaControlCenter::configure_button(
+    Gtk::Button& button,
+    const std::string& text,
+    const std::string& tooltip)
+{
+    button.set_label(text);
+
+    button.set_tooltip_text(
+        tooltip
+    );
+
+    button.set_hexpand(true);
+}
+
+
+/*
+ * ================================================================
+ * STATUS
+ * ================================================================
+ */
+
+void SambaControlCenter::create_status_panel()
+{
+    status_grid.set_row_spacing(5);
+    status_grid.set_column_spacing(15);
+
+    auto* l1 =
+        Gtk::make_managed<Gtk::Label>("Samba:");
+
+    auto* l2 =
+        Gtk::make_managed<Gtk::Label>("tcpdump:");
+
+    auto* l3 =
+        Gtk::make_managed<Gtk::Label>("Carpeta Red:");
+
+    auto* l4 =
+        Gtk::make_managed<Gtk::Label>("smbd:");
+
+    auto* l5 =
+        Gtk::make_managed<Gtk::Label>("nmbd:");
+
+    auto* l6 =
+        Gtk::make_managed<Gtk::Label>("UFW:");
+
+    auto* l7 =
+        Gtk::make_managed<Gtk::Label>("139/445:");
+
+    auto* l8 =
+        Gtk::make_managed<Gtk::Label>("Red:");
+
+    status_grid.attach(
+        *l1,
+        0, 0
+    );
+
+    status_grid.attach(
+        samba_status,
+        1, 0
+    );
+
+    status_grid.attach(
+        *l2,
+        2, 0
+    );
+
+    status_grid.attach(
+        tcpdump_status,
+        3, 0
+    );
+
+    status_grid.attach(
+        *l3,
+        0, 1
+    );
+
+    status_grid.attach(
+        folder_status,
+        1, 1
+    );
+
+    status_grid.attach(
+        *l4,
+        2, 1
+    );
+
+    status_grid.attach(
+        smbd_status,
+        3, 1
+    );
+
+    status_grid.attach(
+        *l5,
+        0, 2
+    );
+
+    status_grid.attach(
+        nmbd_status,
+        1, 2
+    );
+
+    status_grid.attach(
+        *l6,
+        2, 2
+    );
+
+    status_grid.attach(
+        firewall_status,
+        3, 2
+    );
+
+    status_grid.attach(
+        *l7,
+        0, 3
+    );
+
+    status_grid.attach(
+        ports_status,
+        1, 3
+    );
+
+    status_grid.attach(
+        *l8,
+        2, 3
+    );
+
+    status_grid.attach(
+        network_status,
+        3, 3
+    );
+}
+
+
+/*
+ * ================================================================
+ * LOG
+ * ================================================================
+ */
+
+void SambaControlCenter::append_log(
+    const std::string& text)
+{
+    if (!log_buffer)
+        return;
+
+    log_buffer->insert(
+        log_buffer->end(),
+        text + "\n"
+    );
+
+    auto end_iter = log_buffer->end();
+
+    log_view.scroll_to(
+        end_iter,
+        0.0,
+        0.0,
+        1.0
+    );
+}
+
+
+void SambaControlCenter::append_section(
+    const std::string& title)
+{
+    append_log("");
+
+    append_log(
+        "============================================================"
+    );
+
+    append_log(
+        " " + title
+    );
+
+    append_log(
+        "============================================================"
+    );
+}
+
+
+void SambaControlCenter::set_status(
+    Gtk::Label& label,
+    const std::string& text,
+    bool good)
+{
+    const std::string color =
+        good ? "green" : "red";
+
+    const std::string symbol =
+        good ? "✓" : "✗";
+
+    label.set_markup(
+        "<span foreground='" +
+        color +
+        "' weight='bold'>" +
+        symbol +
+        " " +
+        text +
+        "</span>"
+    );
+}
+
+
+void SambaControlCenter::set_status_unknown(
+    Gtk::Label& label,
+    const std::string& text)
+{
+    label.set_markup(
+        "<span foreground='orange' "
+        "weight='bold'>⚠ " +
+        text +
+        "</span>"
+    );
+}
+
+
+/*
+ * ================================================================
+ * ADMINISTRACIÓN
+ * ================================================================
+ */
+
+std::string SambaControlCenter::pkexec_command(
+    const std::string& command)
+{
+    return
+        "pkexec /bin/sh -c " +
+        shell_escape(command);
+}
+
+
+bool SambaControlCenter::run_admin_command(
+    const std::string& command,
+    std::string& output)
+{
+    int rc = -1;
+
+    output =
+        execute_command(
+            pkexec_command(command),
+            &rc
+        );
+
+    return rc == 0;
+}
+
+
+/*
+ * ================================================================
+ * DEPENDENCIAS
+ * ================================================================
+ */
+
+bool SambaControlCenter::check_package(
+    const std::string& command,
+    const std::string& package)
+{
+    if (command_exists(command))
+    {
+        append_log(
+            "[OK] " +
+            command +
+            " encontrado."
+        );
+
+        return true;
+    }
+
+    append_log(
+        "[FALTA] " +
+        command +
+        " no está instalado."
+    );
+
+    return false;
+}
+
+
+void SambaControlCenter::check_dependencies()
+{
+    append_section(
+        "VERIFICACIÓN DE DEPENDENCIAS"
+    );
+
+    const bool samba =
+        check_package(
+            "smbd",
+            "samba"
+        );
+
+    const bool smbclient =
+        check_package(
+            "smbclient",
+            "smbclient"
+        );
+
+    const bool smbpasswd =
+        check_package(
+            "smbpasswd",
+            "samba-common-bin"
+        );
+
+    const bool testparm =
+        check_package(
+            "testparm",
+            "samba-common-bin"
+        );
+
+    const bool tcpdump =
+        check_package(
+            "tcpdump",
+            "tcpdump"
+        );
+
+    const bool ufw =
+        check_package(
+            "ufw",
+            "ufw"
+        );
+
+    const bool ss =
+        check_package(
+            "ss",
+            "iproute2"
+        );
+
+    const bool ping =
+        check_package(
+            "ping",
+            "iputils-ping"
+        );
+
+    const bool nc =
+        check_package(
+            "nc",
+            "netcat-openbsd"
+        );
+
+    set_status(
+        samba_status,
+        samba ? "INSTALADO" : "FALTA",
+        samba
+    );
+
+    set_status(
+        tcpdump_status,
+        tcpdump ? "INSTALADO" : "FALTA",
+        tcpdump
+    );
+
+    append_log("");
+
+    append_log(
+        "smbclient: " +
+        std::string(
+            smbclient ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "smbpasswd: " +
+        std::string(
+            smbpasswd ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "testparm: " +
+        std::string(
+            testparm ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "ufw: " +
+        std::string(
+            ufw ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "ss: " +
+        std::string(
+            ss ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "ping: " +
+        std::string(
+            ping ? "OK" : "FALTA"
+        )
+    );
+
+    append_log(
+        "nc: " +
+        std::string(
+            nc ? "OK" : "FALTA"
+        )
+    );
+
+    /*
+     * Una sola instalación.
+     */
+
+    if (!samba ||
+        !smbclient ||
+        !smbpasswd ||
+        !testparm ||
+        !tcpdump ||
+        !ufw ||
+        !ss ||
+        !ping ||
+        !nc)
+    {
+        if (ask_install(
+                "componentes Samba / red"))
+        {
+            install_dependencies();
+        }
+    }
+
+    if (command_exists("smbd"))
+    {
+        append_log(
+            "Samba: " +
+            get_command_output(
+                "smbd --version"
+            )
+        );
+    }
+
+    if (command_exists("tcpdump"))
+    {
+        append_log(
+            "tcpdump: " +
+            get_command_output(
+                "tcpdump --version | head -n 1"
+            )
+        );
+    }
+}
+
+
+void SambaControlCenter::install_dependencies()
+{
+    append_section(
+        "INSTALACIÓN DE DEPENDENCIAS"
+    );
+
+    std::string output;
+
+    const std::string command =
+        "apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive "
+        "apt-get install -y "
+        "samba "
+        "samba-common-bin "
+        "smbclient "
+        "tcpdump "
+        "ufw "
+        "iproute2 "
+        "iputils-ping "
+        "procps "
+        "netcat-openbsd "
+        "coreutils";
+
+    const bool ok =
+        run_admin_command(
+            command,
+            output
+        );
+
+    append_log(output);
+
+    if (ok)
+    {
+        append_log(
+            "[OK] Dependencias instaladas."
+        );
+
+        show_info(
+            "Dependencias",
+            "Las dependencias fueron instaladas correctamente."
+        );
+    }
+    else
+    {
+        show_error(
+            "Dependencias",
+            "No fue posible instalar las dependencias."
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * SAMBA
+ * ================================================================
+ */
+
+bool SambaControlCenter::check_samba()
+{
+    append_section("SAMBA");
+
+    if (!command_exists("smbd"))
+    {
+        set_status(
+            samba_status,
+            "NO INSTALADO",
+            false
+        );
+
+        return false;
+    }
+
+    const std::string version =
+        get_command_output(
+            "smbd --version"
+        );
+
+    append_log(
+        "Versión Samba: " +
+        version
+    );
+
+    append_log(
+        "Ruta smbd: " +
+        get_command_output(
+            "command -v smbd"
+        )
+    );
+
+    append_log(
+        "Ruta smbclient: " +
+        get_command_output(
+            "command -v smbclient"
+        )
+    );
+
+    append_log(
+        "Ruta smbpasswd: " +
+        get_command_output(
+            "command -v smbpasswd"
+        )
+    );
+
+    append_log(
+        "Ruta testparm: " +
+        get_command_output(
+            "command -v testparm"
+        )
+    );
+
+    set_status(
+        samba_status,
+        version.empty()
+            ? "INSTALADO"
+            : version,
+        true
+    );
+
+    return true;
+}
+
+
+bool SambaControlCenter::check_smbclient()
+{
+    return command_exists(
+        "smbclient"
+    );
+}
+
+
+bool SambaControlCenter::check_smbpasswd()
+{
+    return command_exists(
+        "smbpasswd"
+    );
+}
+
+
+bool SambaControlCenter::check_testparm()
+{
+    return command_exists(
+        "testparm"
+    );
+}
+
+
+/*
+ * ================================================================
+ * SMB.CONF
+ * ================================================================
+ */
+
+void SambaControlCenter::backup_samba_config()
+{
+    if (!fs::exists(samba_config))
+    {
+        append_log(
+            "[INFO] No existe smb.conf anterior."
+        );
+
+        return;
+    }
+
+    const std::string backup =
+        samba_config +
+        ".backup";
+
+    const std::string command =
+        "cp " +
+        shell_escape(samba_config) +
+        " " +
+        shell_escape(backup);
+
+    std::string output;
+
+    if (run_admin_command(
+            command,
+            output))
+    {
+        append_log(
+            "[BACKUP] " +
+            backup
+        );
+    }
+    else
+    {
+        append_log(output);
+    }
+}
+
+
+void SambaControlCenter::create_samba_config()
+{
+    append_section(
+        "CONFIGURACIÓN SMB.CONF"
+    );
+
+    backup_samba_config();
+
+    /*
+     * Generamos dinámicamente usuario y ruta.
+     */
+
+    std::ostringstream cfg;
+
+    cfg
+        << "[global]\n"
+        << "    workgroup = WORKGROUP\n"
+        << "    server string = Samba Server MX Linux\n"
+        << "    server role = standalone server\n"
+        << "    security = user\n"
+        << "    map to guest = Bad User\n"
+        << "\n"
+        << "    log file = /var/log/samba/log.%m\n"
+        << "    max log size = 1000\n"
+        << "\n"
+        << "    obey pam restrictions = yes\n"
+        << "    unix password sync = yes\n"
+        << "    pam password change = yes\n"
+        << "\n"
+        << "    passwd program = /usr/bin/passwd %u\n"
+        << "    passwd chat = *Enter\\snew\\s*\\spassword:* %n\\n "
+           "*Retype\\snew\\s*\\spassword:* %n\\n "
+           "*password\\supdated\\ssuccessfully* .\n"
+        << "\n"
+        << "    usershare allow guests = yes\n"
+        << "\n"
+        << "[homes]\n"
+        << "    comment = Home Directories\n"
+        << "    browseable = no\n"
+        << "    read only = no\n"
+        << "    valid users = %S\n"
+        << "    create mask = 0700\n"
+        << "    directory mask = 0700\n"
+        << "\n"
+        << "[printers]\n"
+        << "    comment = All Printers\n"
+        << "    browseable = no\n"
+        << "    printable = yes\n"
+        << "    path = /var/tmp\n"
+        << "    create mask = 0700\n"
+        << "\n"
+        << "[print$]\n"
+        << "    comment = Printer Drivers\n"
+        << "    path = /var/lib/samba/printers\n"
+        << "\n"
+        << "[compartida]\n"
+        << "    comment = Carpeta compartida de "
+        << samba_user << "\n"
+        << "    path = "
+        << shared_folder << "\n"
+        << "    browseable = yes\n"
+        << "    read only = no\n"
+        << "    writable = yes\n"
+        << "    valid users = "
+        << samba_user << "\n"
+        << "    force user = "
+        << samba_user << "\n"
+        << "    create mask = 0664\n"
+        << "    directory mask = 0775\n";
+
+    const std::string config =
+        cfg.str();
+
+    const std::string temp =
+        "/tmp/samba_gui_smb.conf." +
+        std::to_string(
+            static_cast<long long>(getpid())
+        );
+
+    {
+        std::ofstream file(
+            temp
+        );
+
+        if (!file)
+        {
+            show_error(
+                "Samba",
+                "No fue posible crear el archivo temporal."
+            );
+
+            return;
+        }
+
+        file << config;
+    }
+
+    const std::string command =
+        "install -o root -g root -m 0644 " +
+        shell_escape(temp) +
+        " " +
+        shell_escape(samba_config) +
+        " && rm -f " +
+        shell_escape(temp);
+
+    std::string output;
+
+    if (run_admin_command(
+            command,
+            output))
+    {
+        append_log(
+            "[OK] smb.conf actualizado."
+        );
+
+        append_log(
+            "Share: [compartida]"
+        );
+
+        append_log(
+            "Path: " +
+            shared_folder
+        );
+
+        append_log(
+            "User: " +
+            samba_user
+        );
+    }
+    else
+    {
+        append_log(output);
+
+        std::remove(
+            temp.c_str()
+        );
+
+        show_error(
+            "Samba",
+            "No fue posible modificar smb.conf."
+        );
+    }
+}
+
+
+bool SambaControlCenter::validate_samba_config()
+{
+    append_section(
+        "TESTPARM"
+    );
+
+    if (!command_exists(
+            "testparm"))
+    {
+        append_log(
+            "[ERROR] testparm no está instalado."
+        );
+
+        return false;
+    }
+
+    int rc = -1;
+
+    const std::string output =
+        execute_command(
+            "testparm -s",
+            &rc
+        );
+
+    append_log(output);
+
+    if (rc == 0)
+    {
+        append_log(
+            "[OK] Configuración Samba válida."
+        );
+
+        return true;
+    }
+
+    append_log(
+        "[ERROR] testparm encontró problemas."
+    );
+
+    return false;
+}
+
+
+void SambaControlCenter::configure_samba()
+{
+    append_section(
+        "CONFIGURAR SAMBA"
+    );
+
+    create_shared_folder();
+
+    create_samba_config();
+
+    if (!validate_samba_config())
+    {
+        show_error(
+            "Samba",
+            "La configuración no pasó testparm."
+        );
+
+        return;
+    }
+
+    create_samba_user();
+
+    restart_services();
+
+    configure_firewall();
+
+    check_ports();
+
+    append_log(
+        "Configuración de Samba finalizada."
+    );
+
+    show_info(
+        "Samba",
+        "Configuración completada."
+    );
+}
+
+
+/*
+ * ================================================================
+ * CARPETA
+ * ================================================================
+ */
+
+bool SambaControlCenter::folder_exists()
+{
+    append_section(
+        "CARPETA COMPARTIDA"
+    );
+
+    std::error_code ec;
+
+    const bool exists =
+        fs::exists(
+            shared_folder,
+            ec
+        );
+
+    const bool directory =
+        exists &&
+        fs::is_directory(
+            shared_folder,
+            ec
+        );
+
+    if (directory)
+    {
+        append_log(
+            "[OK] Existe: " +
+            shared_folder
+        );
+
+        set_status(
+            folder_status,
+            "EXISTE",
+            true
+        );
+
+        return true;
+    }
+
+    append_log(
+        "[FALTA] No existe: " +
+        shared_folder
+    );
+
+    set_status(
+        folder_status,
+        "NO EXISTE",
+        false
+    );
+
+    return false;
+}
+
+
+void SambaControlCenter::create_shared_folder()
+{
+    append_section(
+        "CREACIÓN DE CARPETA RED"
+    );
+
+    std::string output;
+
+    const std::string command =
+        "mkdir -p " +
+        shell_escape(shared_folder) +
+        " && "
+        "chown -R " +
+        shell_escape(
+            samba_user + ":" + samba_user
+        ) +
+        " " +
+        shell_escape(shared_folder) +
+        " && "
+        "chmod 0775 " +
+        shell_escape(shared_folder);
+
+    if (run_admin_command(
+            command,
+            output))
+    {
+        append_log(
+            "[OK] Carpeta creada/verificada."
+        );
+
+        append_log(
+            "Ruta: " +
+            shared_folder
+        );
+
+        set_status(
+            folder_status,
+            "OK - 775",
+            true
+        );
+    }
+    else
+    {
+        append_log(output);
+
+        set_status(
+            folder_status,
+            "ERROR",
+            false
+        );
+    }
+}
+
+
+void SambaControlCenter::fix_folder_permissions()
+{
+    create_shared_folder();
+}
+
+
+/*
+ * ================================================================
+ * USUARIO SAMBA
+ * ================================================================
+ */
+
+bool SambaControlCenter::samba_user_exists()
+{
+    if (!command_exists(
+            "pdbedit"))
+    {
+        return false;
+    }
+
+    std::string output;
+
+    const std::string command =
+        "pdbedit -L 2>/dev/null";
+
+    output =
+        get_command_output(
+            command
+        );
+
+    std::istringstream stream(
+        output
+    );
+
+    std::string line;
+
+    while (
+        std::getline(
+            stream,
+            line
+        )
+    )
+    {
+        const auto pos =
+            line.find(':');
+
+        const std::string user =
+            pos == std::string::npos
+                ? trim(line)
+                : trim(
+                    line.substr(0, pos)
+                  );
+
+        if (user == samba_user)
+            return true;
+    }
+
+    return false;
+}
+
+
+void SambaControlCenter::create_samba_user()
+{
+    append_section(
+        "USUARIO SAMBA"
+    );
+
+    if (samba_user_exists())
+    {
+        append_log(
+            "[OK] Usuario Samba '" +
+            samba_user +
+            "' ya existe."
+        );
+
+        return;
+    }
+
+    append_log(
+        "El usuario Linux '" +
+        samba_user +
+        "' existe."
+    );
+
+    append_log(
+        "El usuario Samba todavía no tiene una cuenta."
+    );
+
+    append_log(
+        "Utilice CONTRASEÑA SAMBA para crearla."
+    );
+}
+
+
+/*
+ * ================================================================
+ * CONTRASEÑA SAMBA
+ * ================================================================
+ */
+
+void SambaControlCenter::show_password_dialog()
+{
+    auto dialog =
+        Gtk::make_managed<Gtk::Dialog>();
+
+    dialog->set_transient_for(
+        *this
+    );
+
+    dialog->set_modal(true);
+
+    dialog->set_title(
+        "Contraseña Samba"
+    );
+
+    dialog->add_button(
+        "Cancelar",
+        Gtk::ResponseType::CANCEL
+    );
+
+    dialog->add_button(
+        "Guardar",
+        Gtk::ResponseType::OK
+    );
+
+    auto* content =
+        dialog->get_content_area();
+
+    content->set_spacing(10);
+    content->set_margin(15);
+
+    auto* label =
+        Gtk::make_managed<Gtk::Label>(
+            "Usuario Samba: " +
+            samba_user
+        );
+
+    content->append(
+        *label
+    );
+
+    auto* password1 =
+        Gtk::make_managed<Gtk::PasswordEntry>();
+
+    password1->property_placeholder_text() =
+        "Nueva contraseña";
+
+    content->append(
+        *password1
+    );
+
+    auto* password2 =
+        Gtk::make_managed<Gtk::PasswordEntry>();
+
+    password2->property_placeholder_text() =
+        "Repetir contraseña";
+
+    content->append(
+        *password2
+    );
+
+    dialog->signal_response().connect(
+        [this,
+         dialog,
+         password1,
+         password2]
+        (int response)
+        {
+            if (
+                response !=
+                Gtk::ResponseType::OK
+            )
+            {
+                dialog->close();
+                return;
+            }
+
+            const std::string p1 =
+                password1->get_text();
+
+            const std::string p2 =
+                password2->get_text();
+
+            if (p1.empty())
+            {
+                show_error(
+                    "Contraseña",
+                    "La contraseña no puede estar vacía."
+                );
+
+                return;
+            }
+
+            if (p1 != p2)
+            {
+                show_error(
+                    "Contraseña",
+                    "Las contraseñas no coinciden."
+                );
+
+                return;
+            }
+
+            set_samba_password(
+                p1
+            );
+
+            dialog->close();
+        }
+    );
+
+    dialog->present();
+}
+
+
+void SambaControlCenter::set_samba_password(
+    const std::string& password)
+{
+    append_section(
+        "CONFIGURANDO CONTRASEÑA SAMBA"
+    );
+
+    /*
+     * No almacenamos la contraseña directamente
+     * en un archivo permanente.
+     *
+     * Se utiliza stdin de smbpasswd.
+     */
+
+    const std::string escaped_password =
+        shell_escape(password);
+
+    /*
+     * printf recibe la contraseña ya escapada.
+     */
+
+    const std::string command =
+        "printf '%s\\n%s\\n' " +
+        escaped_password +
+        " " +
+        escaped_password +
+        " | smbpasswd -s -a " +
+        shell_escape(samba_user);
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            command,
+            output
+        );
+
+    append_log(output);
+
+    if (ok)
+    {
+        append_log(
+            "[OK] Contraseña Samba configurada."
+        );
+
+        show_info(
+            "Samba",
+            "Contraseña configurada correctamente."
+        );
+    }
+    else
+    {
+        show_error(
+            "Samba",
+            "No fue posible configurar la contraseña."
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * SERVICIOS SYSVINIT
+ * ================================================================
+ */
+
+void SambaControlCenter::restart_smbd()
+{
+    append_log(
+        "Reiniciando smbd..."
+    );
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            "service smbd restart",
+            output
+        );
+
+    append_log(output);
+
+    set_status(
+        smbd_status,
+        ok ? "RESTART OK" : "ERROR",
+        ok
+    );
+}
+
+
+void SambaControlCenter::restart_nmbd()
+{
+    append_log(
+        "Reiniciando nmbd..."
+    );
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            "service nmbd restart",
+            output
+        );
+
+    append_log(output);
+
+    set_status(
+        nmbd_status,
+        ok ? "RESTART OK" : "ERROR",
+        ok
+    );
+}
+
+
+void SambaControlCenter::restart_services()
+{
+    append_section(
+        "REINICIAR SAMBA"
+    );
+
+    if (!command_exists("smbd"))
+    {
+        append_log(
+            "[ERROR] smbd no está instalado."
+        );
+
+        return;
+    }
+
+    restart_smbd();
+
+    /*
+     * nmbd puede no existir en determinadas
+     * configuraciones modernas de Samba.
+     */
+
+    if (command_exists("nmbd"))
+    {
+        restart_nmbd();
+    }
+    else
+    {
+        append_log(
+            "[INFO] nmbd no está disponible."
+        );
+    }
+
+    check_services();
+}
+
+
+void SambaControlCenter::check_services()
+{
+    append_section(
+        "ESTADO DE SERVICIOS"
+    );
+
+    /*
+     * smbd
+     */
+
+    int rc1 = -1;
+
+    const std::string smbd =
+        execute_command(
+            "service smbd status",
+            &rc1
+        );
+
+    append_log(
+        "---- smbd ----"
+    );
+
+    append_log(smbd);
+
+    const std::string smbd_process =
+        get_command_output(
+            "pgrep -x smbd"
+        );
+
+    const bool smbd_ok =
+        !smbd_process.empty();
+
+    set_status(
+        smbd_status,
+        smbd_ok
+            ? "RUNNING"
+            : "STOPPED",
+        smbd_ok
+    );
+
+    /*
+     * nmbd
+     */
+
+    if (command_exists("nmbd"))
+    {
+        int rc2 = -1;
+
+        const std::string nmbd =
+            execute_command(
+                "service nmbd status",
+                &rc2
+            );
+
+        append_log(
+            "---- nmbd ----"
+        );
+
+        append_log(nmbd);
+
+        const std::string nmbd_process =
+            get_command_output(
+                "pgrep -x nmbd"
+            );
+
+        const bool nmbd_ok =
+            !nmbd_process.empty();
+
+        set_status(
+            nmbd_status,
+            nmbd_ok
+                ? "RUNNING"
+                : "STOPPED",
+            nmbd_ok
+        );
+    }
+    else
+    {
+        append_log(
+            "[INFO] nmbd no está instalado."
+        );
+
+        set_status_unknown(
+            nmbd_status,
+            "NO DISPONIBLE"
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * UFW
+ * ================================================================
+ */
+
+void SambaControlCenter::configure_firewall()
+{
+    append_section(
+        "FIREWALL UFW"
+    );
+
+    if (!command_exists("ufw"))
+    {
+        append_log(
+            "UFW no está instalado."
+        );
+
+        return;
+    }
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            "ufw allow samba",
+            output
+        );
+
+    append_log(output);
+
+    check_firewall();
+
+    if (ok)
+    {
+        append_log(
+            "[OK] Perfil Samba permitido en UFW."
+        );
+    }
+}
+
+
+void SambaControlCenter::check_firewall()
+{
+    append_section(
+        "ESTADO UFW"
+    );
+
+    if (!command_exists("ufw"))
+    {
+        set_status_unknown(
+            firewall_status,
+            "NO INSTALADO"
+        );
+
+        return;
+    }
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            "ufw status",
+            output
+        );
+
+    append_log(output);
+
+    if (!ok)
+    {
+        set_status_unknown(
+            firewall_status,
+            "NO DISPONIBLE"
+        );
+
+        return;
+    }
+
+    /*
+     * Detectamos:
+     *
+     * Samba
+     * 139/tcp
+     * 445/tcp
+     */
+
+    const bool samba =
+        output.find("Samba") !=
+        std::string::npos;
+
+    const bool port139 =
+        output.find("139") !=
+        std::string::npos;
+
+    const bool port445 =
+        output.find("445") !=
+        std::string::npos;
+
+    const bool allowed =
+        samba ||
+        (port139 && port445);
+
+    set_status(
+        firewall_status,
+        allowed
+            ? "SAMBA PERMITIDO"
+            : "SAMBA NO PERMITIDO",
+        allowed
+    );
+}
+
+
+/*
+ * ================================================================
+ * PUERTOS
+ * ================================================================
+ */
+
+void SambaControlCenter::check_ports()
+{
+    append_section(
+        "PUERTOS SAMBA"
+    );
+
+    if (!command_exists("ss"))
+    {
+        append_log(
+            "ss no está instalado."
+        );
+
+        set_status_unknown(
+            ports_status,
+            "ss NO DISPONIBLE"
+        );
+
+        return;
+    }
+
+    const std::string output =
+        get_command_output(
+            "ss -lntup"
+        );
+
+    std::istringstream stream(
+        output
+    );
+
+    std::string line;
+
+    std::string samba_lines;
+
+    while (
+        std::getline(
+            stream,
+            line
+        )
+    )
+    {
+        if (
+            line.find(":139") !=
+            std::string::npos ||
+            line.find(":445") !=
+            std::string::npos
+        )
+        {
+            samba_lines +=
+                line + "\n";
+        }
+    }
+
+    if (samba_lines.empty())
+    {
+        append_log(
+            "No se detectaron puertos Samba."
+        );
+
+        set_status(
+            ports_status,
+            "NO LISTEN",
+            false
+        );
+
+        return;
+    }
+
+    append_log(
+        samba_lines
+    );
+
+    const bool port139 =
+        samba_lines.find(":139") !=
+        std::string::npos;
+
+    const bool port445 =
+        samba_lines.find(":445") !=
+        std::string::npos;
+
+    if (port139 && port445)
+    {
+        set_status(
+            ports_status,
+            "139 + 445 LISTEN",
+            true
+        );
+    }
+    else if (port445)
+    {
+        set_status(
+            ports_status,
+            "445 LISTEN",
+            true
+        );
+    }
+    else if (port139)
+    {
+        set_status(
+            ports_status,
+            "139 LISTEN",
+            true
+        );
+    }
+    else
+    {
+        set_status(
+            ports_status,
+            "NO LISTEN",
+            false
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * RED
+ * ================================================================
+ */
+
+/*
+ * ================================================================
+ * INFORMACIÓN DE INTERFACES
+ * ================================================================
+ */
+
+void SambaControlCenter::show_interfaces()
+{
+    append_section("INTERFACES DE RED");
+
+    append_log("Interfaces IPv4:");
+    append_log(
+        get_command_output(
+            "ip -4 -br addr"
+        )
+    );
+
+    append_log("");
+
+    append_log("Direcciones IPv4 completas:");
+    append_log(
+        get_command_output(
+            "ip -4 addr show"
+        )
+    );
+
+    append_log("");
+
+    append_log("Estado de las interfaces:");
+    append_log(
+        get_command_output(
+            "ip -br link"
+        )
+    );
+
+    append_log("");
+
+    append_log("Hostname -I:");
+    append_log(
+        get_command_output(
+            "hostname -I"
+        )
+    );
+
+    set_status(
+        network_status,
+        "INTERFACES OK",
+        true
+    );
+}
+
+
+/*
+ * ================================================================
+ * TABLA DE RUTAS
+ * ================================================================
+ */
+
+void SambaControlCenter::show_routes()
+{
+    append_section("TABLA DE RUTAS IPv4");
+
+    append_log(
+        get_command_output(
+            "ip -4 route"
+        )
+    );
+
+    append_section(
+        "RUTA PREFERIDA HACIA INTERNET"
+    );
+
+    append_log(
+        get_command_output(
+            "ip route get 8.8.8.8"
+        )
+    );
+
+    append_section(
+        "RUTA HACIA WINDOWS 192.168.1.50"
+    );
+
+    append_log(
+        get_command_output(
+            "ip route get 192.168.1.50"
+        )
+    );
+
+    set_status(
+        network_status,
+        "RUTAS OK",
+        true
+    );
+}
+
+
+/*
+ * ================================================================
+ * GATEWAY
+ * ================================================================
+ */
+
+void SambaControlCenter::show_gateway()
+{
+    append_section("GATEWAY / ROUTER");
+
+    std::string output =
+        get_command_output(
+            "ip route | grep '^default'"
+        );
+
+    append_log(output);
+
+    append_section(
+        "GATEWAY PRINCIPAL"
+    );
+
+    std::string gateway =
+        get_command_output(
+            "ip route | "
+            "awk '$1 == \"default\" {print $3, $5}' | "
+            "head -n 1"
+        );
+
+    if (gateway.empty())
+    {
+        append_log(
+            "[ERROR] No se pudo detectar el gateway."
+        );
+
+        set_status(
+            network_status,
+            "GATEWAY ERROR",
+            false
+        );
+
+        return;
+    }
+
+    append_log(
+        "Gateway principal:"
+    );
+
+    append_log(gateway);
+
+    /*
+     * Extraemos solamente la primera dirección del gateway.
+     */
+    std::string gateway_ip =
+        get_command_output(
+            "ip route | "
+            "awk '$1 == \"default\" {print $3}' | "
+            "head -n 1"
+        );
+
+    if (gateway_ip.empty())
+    {
+        append_log(
+            "[ERROR] No se pudo obtener la IP del gateway."
+        );
+
+        set_status(
+            network_status,
+            "GATEWAY ERROR",
+            false
+        );
+
+        return;
+    }
+
+    append_log("");
+
+    append_log(
+        "Prueba de conectividad con gateway:"
+    );
+
+    std::string ping =
+        get_command_output(
+            "ping -c 2 -W 2 " + gateway_ip
+        );
+
+    append_log(ping);
+
+    if (ping.find("0% packet loss") != std::string::npos)
+    {
+        append_log(
+            "[OK] El gateway responde."
+        );
+
+        set_status(
+            network_status,
+            "GATEWAY OK",
+            true
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] El gateway no responde."
+        );
+
+        set_status(
+            network_status,
+            "GATEWAY ERROR",
+            false
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * WINDOWS
+ * ================================================================
+ */
+
+void SambaControlCenter::show_windows_network()
+{
+    const std::string windows_ip = "192.168.1.50";
+
+    append_section(
+        "WINDOWS 192.168.1.50"
+    );
+
+    append_log(
+        "Objetivo: " + windows_ip
+    );
+
+    append_section(
+        "RUTA HACIA WINDOWS"
+    );
+
+    append_log(
+        get_command_output(
+            "ip route get " + windows_ip
+        )
+    );
+
+    append_section(
+        "PING WINDOWS"
+    );
+
+    std::string ping =
+        get_command_output(
+            "ping -c 4 -W 2 " + windows_ip
+        );
+
+    append_log(ping);
+
+    if (ping.find("0% packet loss") != std::string::npos)
+    {
+        append_log(
+            "[OK] Windows responde al ping."
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] Windows no responde al ping."
+        );
+    }
+
+    append_section(
+        "PUERTO SMB TCP 445"
+    );
+
+    std::string tcp445 =
+        get_command_output(
+            "nc -zvw 3 " + windows_ip + " 445"
+        );
+
+    append_log(tcp445);
+
+    if (
+        tcp445.find("succeeded") != std::string::npos ||
+        tcp445.find("open") != std::string::npos
+    )
+    {
+        append_log(
+            "[OK] TCP 445 accesible."
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] TCP 445 no accesible."
+        );
+    }
+
+    append_section(
+        "PUERTO NETBIOS TCP 139"
+    );
+
+    std::string tcp139 =
+        get_command_output(
+            "nc -zvw 3 " + windows_ip + " 139"
+        );
+
+    append_log(tcp139);
+
+    if (
+        tcp139.find("succeeded") != std::string::npos ||
+        tcp139.find("open") != std::string::npos
+    )
+    {
+        append_log(
+            "[OK] TCP 139 accesible."
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] TCP 139 no accesible."
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * TCP 445 WINDOWS
+ * ================================================================
+ */
+
+void SambaControlCenter::test_windows_tcp445()
+{
+    const std::string windows_ip = "192.168.1.50";
+
+    append_section(
+        "PRUEBA TCP 445 - WINDOWS"
+    );
+
+    append_log(
+        "Windows: " + windows_ip
+    );
+
+    append_log(
+        "Probando TCP/445..."
+    );
+
+    std::string output =
+        get_command_output(
+            "nc -zvw 5 " + windows_ip + " 445"
+        );
+
+    append_log(output);
+
+    if (
+        output.find("succeeded") != std::string::npos ||
+        output.find("open") != std::string::npos
+    )
+    {
+        append_log(
+            "[OK] TCP 445 está accesible."
+        );
+
+        set_status(
+            network_status,
+            "TCP 445 OK",
+            true
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] TCP 445 no está accesible."
+        );
+
+        set_status(
+            network_status,
+            "TCP 445 ERROR",
+            false
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * RED / ROUTING GENERAL
+ * ================================================================
+ */
+
+void SambaControlCenter::show_routing()
+{
+    append_section(
+        "INFORMACIÓN GENERAL DE RED"
+    );
+
+    append_section(
+        "INTERFACES IPv4"
+    );
+
+    append_log(
+        get_command_output(
+            "ip -4 -br addr"
+        )
+    );
+
+    append_section(
+        "HOSTNAME -I"
+    );
+
+    append_log(
+        get_command_output(
+            "hostname -I"
+        )
+    );
+
+    append_section(
+        "TABLA DE RUTAS"
+    );
+
+    append_log(
+        get_command_output(
+            "ip -4 route"
+        )
+    );
+
+    append_section(
+        "RUTA HACIA WINDOWS 192.168.1.50"
+    );
+
+    append_log(
+        get_command_output(
+            "ip route get 192.168.1.50"
+        )
+    );
+
+    append_section(
+        "VECINOS ARP / NEIGHBOURS"
+    );
+
+    append_log(
+        get_command_output(
+            "ip neigh"
+        )
+    );
+
+    set_status(
+        network_status,
+        "RED OK",
+        true
+    );
+}
+
+
+/*
+ * ================================================================
+ * VECINOS ARP / NEIGHBOURS
+ * ================================================================
+ */
+
+void SambaControlCenter::show_neighbors()
+{
+    append_section(
+        "ARP / NEIGHBOURS"
+    );
+
+    std::string output =
+        get_command_output(
+            "ip neigh"
+        );
+
+    append_log(output);
+
+    if (output.empty())
+    {
+        append_log(
+            "[INFO] No se encontraron vecinos."
+        );
+    }
+
+    set_status(
+        network_status,
+        "VECINOS OK",
+        true
+    );
+}
+
+
+/*
+ * ================================================================
+ * PING WINDOWS
+ * ================================================================
+ */
+
+void SambaControlCenter::ping_windows()
+{
+    const std::string windows_ip = "192.168.1.50";
+
+    append_section(
+        "PING WINDOWS"
+    );
+
+    append_log(
+        "Destino: " + windows_ip
+    );
+
+    std::string output =
+        get_command_output(
+            "ping -c 4 -W 2 " + windows_ip
+        );
+
+    append_log(output);
+
+    if (
+        output.find("0% packet loss") !=
+        std::string::npos
+    )
+    {
+        append_log(
+            "[OK] Windows responde correctamente."
+        );
+
+        set_status(
+            network_status,
+            "WINDOWS ONLINE",
+            true
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] Windows no responde."
+        );
+
+        set_status(
+            network_status,
+            "WINDOWS OFFLINE",
+            false
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * SMB PORT
+ * ================================================================
+ */
+
+void SambaControlCenter::test_smb_port()
+{
+    const std::string windows_ip = "192.168.1.50";
+
+    append_section(
+        "PRUEBA SMB TCP 445"
+    );
+
+    std::string output =
+        get_command_output(
+            "nc -zvw 5 " + windows_ip + " 445"
+        );
+
+    append_log(output);
+
+    if (
+        output.find("succeeded") != std::string::npos ||
+        output.find("open") != std::string::npos
+    )
+    {
+        append_log(
+            "[OK] SMB TCP 445 accesible."
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] SMB TCP 445 no accesible."
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * SMBCLIENT
+ * ================================================================
+ */
+
+void SambaControlCenter::test_smbclient()
+{
+    append_section(
+        "PRUEBA SMBCLIENT"
+    );
+
+    std::string output =
+        get_command_output(
+            "smbclient --version 2>&1"
+        );
+
+    append_log(output);
+
+    if (output.empty())
+    {
+        append_log(
+            "[ERROR] smbclient no está disponible."
+        );
+
+        return;
+    }
+
+    append_log(
+        "[OK] smbclient disponible."
+    );
+
+    append_section(
+        "RECURSOS WINDOWS"
+    );
+
+    append_log(
+        get_command_output(
+            "smbclient -L //192.168.1.50 -N 2>&1"
+        )
+    );
+}
+
+
+/*
+ * ================================================================
+ * FIN DEL BLOQUE RED
+ * ================================================================
+ */
+
+void SambaControlCenter::run_tcpdump_diagnostic()
+{
+    append_section(
+        "TCPDUMP - DIAGNÓSTICO SMB"
+    );
+
+    if (!command_exists("tcpdump"))
+    {
+        append_log(
+            "tcpdump no está instalado."
+        );
+
+        return;
+    }
+
+    append_log(
+        "Capturando tráfico TCP/445."
+    );
+
+    append_log(
+        "Objetivo: 192.168.1.50"
+    );
+
+    append_log(
+        "Duración: 15 segundos."
+    );
+
+    std::string output;
+
+    const bool ok =
+        run_admin_command(
+            "timeout 15 "
+            "tcpdump -ni any "
+            "'host 192.168.1.50 and tcp port 445'",
+            output
+        );
+
+    append_log(output);
+
+    if (ok)
+    {
+        append_log(
+            "[OK] Captura terminada."
+        );
+    }
+    else
+    {
+        append_log(
+            "[INFO] tcpdump terminó con código no cero."
+        );
+    }
+}
+
+
+/*
+ * ================================================================
+ * DIAGNÓSTICO COMPLETO
+ * ================================================================
+ */
+
+void SambaControlCenter::full_diagnostic()
+{
+    append_section(
+        "DIAGNÓSTICO COMPLETO SAMBA"
+    );
+
+    append_log(
+        "Usuario Linux: " +
+        current_user()
+    );
+
+    append_log(
+        "HOME: " +
+        home_directory()
+    );
+
+    append_log(
+        "Carpeta compartida: " +
+        shared_folder
+    );
+
+    append_log(
+        "Usuario Samba: " +
+        samba_user
+    );
+
+    check_dependencies();
+
+    check_samba();
+
+    folder_exists();
+
+    check_services();
+
+    check_firewall();
+
+    check_ports();
+
+    show_routing();
+
+    ping_windows();
+
+    test_smb_port();
+
+    append_section(
+        "CONFIGURACIÓN SMB"
+    );
+
+    validate_samba_config();
+
+    append_section(
+        "USUARIO SAMBA"
+    );
+
+    append_log(
+        samba_user_exists()
+            ? "[OK] Usuario Samba existe."
+            : "[FALTA] Usuario Samba no existe."
+    );
+
+    append_section(
+        "PROCESOS SAMBA"
+    );
+
+    append_log(
+        get_command_output(
+            "ps aux | grep '[s]mbd'"
+        )
+    );
+
+    append_section(
+        "SOCKETS SAMBA"
+    );
+
+    append_log(
+        get_command_output(
+            "ss -lntup | "
+            "grep -E ':(139|445)\\b'"
+        )
+    );
+
+    append_section(
+        "CONFIGURACIÓN ACTUAL"
+    );
+
+    if (fs::exists(
+            samba_config))
+    {
+        append_log(
+            samba_config
+        );
+
+        append_log(
+            get_command_output(
+                "testparm -s 2>/dev/null"
+            )
+        );
+    }
+    else
+    {
+        append_log(
+            "[ERROR] No existe " +
+            samba_config
+        );
+    }
+
+    append_section(
+        "DIAGNÓSTICO FINALIZADO"
+    );
+
+    show_info(
+        "Diagnóstico",
+        "Diagnóstico completo terminado."
+    );
+}
+
+
+/*
+ * ================================================================
+ * LIMPIAR
+ * ================================================================
+ */
+
+void SambaControlCenter::clear_log()
+{
+    if (log_buffer)
+        log_buffer->set_text("");
+
+    append_log(
+        "Samba Control Center listo."
+    );
+
+    append_log(
+        "Usuario: " +
+        samba_user
+    );
+
+    append_log(
+        "Share: " +
+        shared_folder
+    );
+}
+
+
+/*
+ * ================================================================
+ * DIÁLOGO SINCRÓNICO COMPATIBLE GTK4
+ * ================================================================
+ *
+ * GTK4 eliminó Gtk::Dialog::run().
+ *
+ * Creamos un MainLoop temporal para poder esperar
+ * la respuesta del diálogo sin utilizar APIs GTK3.
+ *
+ * ================================================================
+ */
+
+int SambaControlCenter::run_dialog_sync(
+    Gtk::Dialog& dialog)
+{
+    auto loop =
+        Glib::MainLoop::create();
+
+    int response =
+        Gtk::ResponseType::NONE;
+
+    dialog.signal_response().connect(
+        [&loop, &response]
+        (int result)
+        {
+            response = result;
+
+            if (loop->is_running())
+                loop->quit();
+        }
+    );
+
+    dialog.present();
+
+    loop->run();
+
+    dialog.close();
+
+    return response;
+}
+
+
+/*
+ * ================================================================
+ * ASK INSTALL
+ * ================================================================
+ */
+
+bool SambaControlCenter::ask_install(
+    const std::string& package)
+{
+    (void)package;
+
+    Gtk::MessageDialog dialog(
+        *this,
+        "Dependencia no instalada",
+        false,
+        Gtk::MessageType::QUESTION,
+        Gtk::ButtonsType::YES_NO,
+        true
+    );
+
+    dialog.set_secondary_text(
+        "Faltan uno o más componentes.\n\n"
+        "Se instalarán:\n"
+        "Samba, smbclient, tcpdump, UFW,\n"
+        "iproute2, ping, netcat y utilidades.\n\n"
+        "¿Desea instalarlos ahora?"
+    );
+
+    const int response =
+        run_dialog_sync(
+            dialog
+        );
+
+    return
+        response ==
+        Gtk::ResponseType::YES;
+}
+
+
+/*
+ * ================================================================
+ * ASK YES / NO
+ * ================================================================
+ */
+
+bool SambaControlCenter::ask_yes_no(
+    const std::string& title,
+    const std::string& message)
+{
+    Gtk::MessageDialog dialog(
+        *this,
+        title,
+        false,
+        Gtk::MessageType::QUESTION,
+        Gtk::ButtonsType::YES_NO,
+        true
+    );
+
+    dialog.set_secondary_text(
+        message
+    );
+
+    const int response =
+        run_dialog_sync(
+            dialog
+        );
+
+    return
+        response ==
+        Gtk::ResponseType::YES;
+}
+
+
+/*
+ * ================================================================
+ * INFO
+ * ================================================================
+ */
+
+void SambaControlCenter::show_info(
+    const std::string& title,
+    const std::string& message)
+{
+    Gtk::MessageDialog dialog(
+        *this,
+        title,
+        false,
+        Gtk::MessageType::INFO,
+        Gtk::ButtonsType::OK,
+        true
+    );
+
+    dialog.set_secondary_text(
+        message
+    );
+
+    run_dialog_sync(
+        dialog
+    );
+}
+
+
+/*
+ * ================================================================
+ * ERROR
+ * ================================================================
+ */
+
+void SambaControlCenter::show_error(
+    const std::string& title,
+    const std::string& message)
+{
+    Gtk::MessageDialog dialog(
+        *this,
+        title,
+        false,
+        Gtk::MessageType::ERROR,
+        Gtk::ButtonsType::OK,
+        true
+    );
+
+    dialog.set_secondary_text(
+        message
+    );
+
+    run_dialog_sync(
+        dialog
+    );
+}
+
+
+/*
+ * ================================================================
+ * MAIN
+ * ================================================================
+ */
+
+int main(
+    int argc,
+    char* argv[])
+{
+    auto app =
+        Gtk::Application::create(
+            "com.saykol.sambacontrolcenter"
+        );
+
+    return app->make_window_and_run<
+        SambaControlCenter>(
+            argc,
+            argv
+        );
+}
+
+
