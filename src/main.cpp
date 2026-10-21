@@ -54,6 +54,7 @@
 #include <string>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <arpa/inet.h>
 
 namespace fs = std::filesystem;
 
@@ -224,6 +225,92 @@ static std::string home_directory()
     return "/home/" + user;
 }
 
+/*
+ * ================================================================
+ * funciones auxiliares
+ * ================================================================
+ */
+
+/*
+ * Configuración de red por usuario.
+ * Archivo: $XDG_CONFIG_HOME/samba-control-center/config
+ */
+static fs::path windows_config_file()
+{
+    const char* config_dir = g_get_user_config_dir();
+
+    if (config_dir && *config_dir)
+    {
+        return fs::path(config_dir)
+            / "samba-control-center"
+            / "config";
+    }
+
+    return fs::path(home_directory())
+        / ".config"
+        / "samba-control-center"
+        / "config";
+}
+
+static bool is_valid_ipv4(const std::string& address)
+{
+    struct in_addr parsed_address{};
+
+    return !address.empty()
+        && inet_pton(
+            AF_INET,
+            address.c_str(),
+            &parsed_address
+        ) == 1;
+}
+
+static std::string load_windows_ip_config()
+{
+    const fs::path config_file = windows_config_file();
+
+    std::error_code error;
+    fs::create_directories(config_file.parent_path(), error);
+
+    std::ifstream input(config_file);
+
+    if (!input)
+    {
+        std::ofstream output(config_file);
+
+        if (output)
+        {
+            output
+                << "# Destino Windows para diagnosticos de red\n"
+                << "# Introduce una direccion IPv4, por ejemplo:\n"
+                << "# windows_ip=192.168.1.50\n"
+                << "windows_ip=\n";
+        }
+
+        return "";
+    }
+
+    std::string line;
+
+    while (std::getline(input, line))
+    {
+        line = trim(line);
+
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        constexpr const char* key = "windows_ip=";
+
+        if (line.rfind(key, 0) == 0)
+        {
+            const std::string address =
+                trim(line.substr(std::char_traits<char>::length(key)));
+
+            return is_valid_ipv4(address) ? address : "";
+        }
+    }
+
+    return "";
+}
 
 /*
  * ================================================================
@@ -301,11 +388,15 @@ private:
      * ------------------------------------------------------------
      */
 
+
     const std::string samba_config =
         "/etc/samba/smb.conf";
 
     std::string shared_folder;
     std::string samba_user;
+
+    // IP del equipo Windows cargada desde la configuración del usuario.
+    std::string windows_ip;
 
     /*
      * ------------------------------------------------------------
@@ -442,11 +533,15 @@ private:
     void show_interfaces();
     void show_routes();
     void show_gateway();
+
     void show_windows_network();
+
     void test_windows_tcp445();
     void show_network();
 
+
     void ping_windows();
+
 
     void test_smb_port();
 
@@ -532,6 +627,7 @@ private:
  * ================================================================
  */
 
+
 SambaControlCenter::SambaControlCenter()
 {
     shared_folder =
@@ -541,8 +637,10 @@ SambaControlCenter::SambaControlCenter()
     samba_user =
         current_user();
 
+    windows_ip = load_windows_ip_config();
+
     set_title(
-        "Samba Control Center - MX Linux"
+        "Samba Control Center"
     );
 
     set_default_size(
@@ -573,6 +671,27 @@ SambaControlCenter::SambaControlCenter()
         shared_folder
     );
 
+    append_log(
+        "Configuracion de red: " +
+        windows_config_file().string()
+    );
+
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] No hay una IPv4 Windows valida configurada. "
+            "Edita el archivo de configuracion para activar "
+            "los diagnosticos dirigidos a Windows."
+        );
+    }
+    else
+    {
+        append_log(
+            "Destino Windows: " +
+            windows_ip
+        );
+    }
+
     check_dependencies();
     check_samba();
     folder_exists();
@@ -580,6 +699,7 @@ SambaControlCenter::SambaControlCenter()
     check_firewall();
     check_ports();
 }
+
 
 
 /*
@@ -2713,15 +2833,26 @@ void SambaControlCenter::show_routes()
         )
     );
 
-    append_section(
-        "RUTA HACIA WINDOWS 192.168.1.50"
-    );
+    if (!windows_ip.empty())
+    {
+        append_section(
+            "RUTA HACIA WINDOWS " + windows_ip
+        );
 
-    append_log(
-        get_command_output(
-            "ip route get 192.168.1.50"
-        )
-    );
+        append_log(
+            get_command_output(
+                "ip route get " + shell_escape(windows_ip)
+            )
+        );
+    }
+    else
+    {
+        append_section("RUTA HACIA WINDOWS");
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+    }
 
     set_status(
         network_status,
@@ -2853,15 +2984,15 @@ void SambaControlCenter::show_gateway()
 
 void SambaControlCenter::show_windows_network()
 {
-    const std::string windows_ip = "192.168.1.50";
 
-    append_section(
-        "WINDOWS 192.168.1.50"
-    );
-
-    append_log(
-        "Objetivo: " + windows_ip
-    );
+        if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
 
     append_section(
         "RUTA HACIA WINDOWS"
@@ -2869,7 +3000,7 @@ void SambaControlCenter::show_windows_network()
 
     append_log(
         get_command_output(
-            "ip route get " + windows_ip
+            "ip route get " + shell_escape(windows_ip)
         )
     );
 
@@ -2879,7 +3010,7 @@ void SambaControlCenter::show_windows_network()
 
     std::string ping =
         get_command_output(
-            "ping -c 4 -W 2 " + windows_ip
+            "ping -c 4 -W 2 " + shell_escape(windows_ip)
         );
 
     append_log(ping);
@@ -2903,7 +3034,7 @@ void SambaControlCenter::show_windows_network()
 
     std::string tcp445 =
         get_command_output(
-            "nc -zvw 3 " + windows_ip + " 445"
+            "nc -zvw 3 " + shell_escape(windows_ip) + " 445"
         );
 
     append_log(tcp445);
@@ -2930,7 +3061,7 @@ void SambaControlCenter::show_windows_network()
 
     std::string tcp139 =
         get_command_output(
-            "nc -zvw 3 " + windows_ip + " 139"
+            "nc -zvw 3 " + shell_escape(windows_ip) + " 139"
         );
 
     append_log(tcp139);
@@ -2961,7 +3092,15 @@ void SambaControlCenter::show_windows_network()
 
 void SambaControlCenter::test_windows_tcp445()
 {
-    const std::string windows_ip = "192.168.1.50";
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
+
 
     append_section(
         "PRUEBA TCP 445 - WINDOWS"
@@ -2977,7 +3116,7 @@ void SambaControlCenter::test_windows_tcp445()
 
     std::string output =
         get_command_output(
-            "nc -zvw 5 " + windows_ip + " 445"
+            "nc -zvw 5 " + shell_escape(windows_ip) + " 445"
         );
 
     append_log(output);
@@ -3054,15 +3193,26 @@ void SambaControlCenter::show_routing()
         )
     );
 
-    append_section(
-        "RUTA HACIA WINDOWS 192.168.1.50"
-    );
+    if (!windows_ip.empty())
+    {
+        append_section(
+            "RUTA HACIA WINDOWS " + windows_ip
+        );
 
-    append_log(
-        get_command_output(
-            "ip route get 192.168.1.50"
-        )
-    );
+        append_log(
+            get_command_output(
+                "ip route get " + shell_escape(windows_ip)
+            )
+        );
+    }
+    else
+    {
+        append_section("RUTA HACIA WINDOWS");
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+    }
 
     append_section(
         "VECINOS ARP / NEIGHBOURS"
@@ -3124,7 +3274,15 @@ void SambaControlCenter::show_neighbors()
 
 void SambaControlCenter::ping_windows()
 {
-    const std::string windows_ip = "192.168.1.50";
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
+
 
     append_section(
         "PING WINDOWS"
@@ -3136,7 +3294,7 @@ void SambaControlCenter::ping_windows()
 
     std::string output =
         get_command_output(
-            "ping -c 4 -W 2 " + windows_ip
+            "ping -c 4 -W 2 " + shell_escape(windows_ip)
         );
 
     append_log(output);
@@ -3179,7 +3337,15 @@ void SambaControlCenter::ping_windows()
 
 void SambaControlCenter::test_smb_port()
 {
-    const std::string windows_ip = "192.168.1.50";
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
+
 
     append_section(
         "PRUEBA SMB TCP 445"
@@ -3187,7 +3353,7 @@ void SambaControlCenter::test_smb_port()
 
     std::string output =
         get_command_output(
-            "nc -zvw 5 " + windows_ip + " 445"
+            "nc -zvw 5 " + shell_escape(windows_ip) + " 445"
         );
 
     append_log(output);
@@ -3242,13 +3408,23 @@ void SambaControlCenter::test_smbclient()
         "[OK] smbclient disponible."
     );
 
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
+
     append_section(
         "RECURSOS WINDOWS"
     );
 
     append_log(
         get_command_output(
-            "smbclient -L //192.168.1.50 -N 2>&1"
+            "smbclient -L " +
+            shell_escape("//" + windows_ip) + " -N"
         )
     );
 }
@@ -3266,6 +3442,15 @@ void SambaControlCenter::run_tcpdump_diagnostic()
         "TCPDUMP - DIAGNÓSTICO SMB"
     );
 
+    if (windows_ip.empty())
+    {
+        append_log(
+            "[INFO] Configura windows_ip en: " +
+            windows_config_file().string()
+        );
+        return;
+    }
+
     if (!command_exists("tcpdump"))
     {
         append_log(
@@ -3280,7 +3465,7 @@ void SambaControlCenter::run_tcpdump_diagnostic()
     );
 
     append_log(
-        "Objetivo: 192.168.1.50"
+        "Objetivo: " + windows_ip
     );
 
     append_log(
@@ -3292,8 +3477,10 @@ void SambaControlCenter::run_tcpdump_diagnostic()
     const bool ok =
         run_admin_command(
             "timeout 15 "
-            "tcpdump -ni any "
-            "'host 192.168.1.50 and tcp port 445'",
+            "tcpdump -ni any " +
+            shell_escape(
+                "host " + windows_ip + " and tcp port 445"
+            ),
             output
         );
 
