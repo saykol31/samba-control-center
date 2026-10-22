@@ -177,6 +177,48 @@ static bool command_exists(
     ) == 0;
 }
 
+/*
+ * Selecciona el gestor de servicios según el init activo.
+ * systemd -> systemctl
+ * SysVinit/OpenRC y compatibles -> service o /etc/init.d
+ */
+static std::string service_command(
+    const std::string& service,
+    const std::string& action)
+{
+    std::string init;
+    std::ifstream init_file("/proc/1/comm");
+
+    if (init_file)
+        std::getline(init_file, init);
+
+    init = trim(init);
+
+    if (init == "systemd" && command_exists("systemctl"))
+    {
+        return "systemctl " + shell_escape(action) +
+               " " + shell_escape(service);
+    }
+
+    if (command_exists("service"))
+    {
+        return "service " + shell_escape(service) +
+               " " + shell_escape(action);
+    }
+
+    const std::string script = "/etc/init.d/" + service;
+
+    if (fs::exists(script))
+    {
+        return shell_escape(script) +
+               " " + shell_escape(action);
+    }
+
+    return "printf '%s\\n' "
+           "'ERROR: no se encontró un gestor de servicios compatible.' "
+           " >&2; exit 127";
+}
+
 
 static std::string get_command_output(
     const std::string& command)
@@ -310,6 +352,109 @@ static std::string load_windows_ip_config()
     }
 
     return "";
+}
+
+/*
+ * ================================================================
+ * LOTE ADMINISTRATIVO (UNA SOLA AUTORIZACIÓN)
+ * ================================================================
+ *
+ * Los pasos con privilegios de una acción se encadenan en un
+ * único script para pkexec: el usuario autoriza una sola vez.
+ *
+ * Cada paso deja su código de salida en un marcador:
+ *
+ *      SCC_RC_<paso>=<código>
+ *
+ * Si un paso falla, los siguientes se saltan ("skip").
+ */
+
+static std::string batch_step(
+    const std::string& step,
+    const std::string& command)
+{
+    return
+        "if [ $F -eq 0 ]; then " +
+        command +
+        "; RC=$?; else RC=skip; fi\n"
+        "echo SCC_RC_" +
+        step +
+        "=$RC\n"
+        "if [ \"$RC\" != \"skip\" ] && [ $RC -ne 0 ]; "
+        "then F=1; fi\n";
+}
+
+
+/*
+ * Extrae de la salida del lote el texto producido por un paso
+ * y su código (0 = bien, -1 = sin marcador, -2 = saltado).
+ * Avanza el cursor hasta después del marcador.
+ */
+static std::string batch_take_segment(
+    const std::string& output,
+    std::size_t& cursor,
+    const std::string& step,
+    int& code)
+{
+    const std::string marker =
+        "SCC_RC_" +
+        step +
+        "=";
+
+    const std::size_t pos =
+        output.find(marker, cursor);
+
+    if (pos == std::string::npos)
+    {
+        code = -1;
+
+        const std::string rest =
+            output.substr(cursor);
+
+        cursor = output.size();
+
+        return rest;
+    }
+
+    std::string segment =
+        output.substr(
+            cursor,
+            pos - cursor
+        );
+
+    while (!segment.empty() &&
+           (segment.back() == '\n' ||
+            segment.back() == '\r'))
+        segment.pop_back();
+
+    const std::size_t value_begin =
+        pos + marker.size();
+
+    const std::size_t value_end =
+        output.find(
+            '\n',
+            value_begin
+        );
+
+    const std::string value =
+        output.substr(
+            value_begin,
+            value_end == std::string::npos
+                ? std::string::npos
+                : value_end - value_begin
+        );
+
+    code =
+        value == "skip"
+            ? -2
+            : std::atoi(value.c_str());
+
+    cursor =
+        value_end == std::string::npos
+            ? output.size()
+            : value_end + 1;
+
+    return segment;
 }
 
 /*
@@ -464,11 +609,10 @@ private:
 
     void configure_samba();
 
-    void create_samba_config();
+    std::string prepare_samba_config_file();
 
     bool validate_samba_config();
 
-    void backup_samba_config();
 
     /*
      * ------------------------------------------------------------
@@ -478,7 +622,7 @@ private:
 
     bool folder_exists();
 
-    void create_shared_folder();
+    bool create_shared_folder();
 
     void fix_folder_permissions();
 
@@ -504,11 +648,8 @@ private:
      * ------------------------------------------------------------
      */
 
-    void restart_smbd();
 
-    void restart_nmbd();
-
-    void restart_services();
+    bool restart_services();
 
     void check_services();
 
@@ -518,7 +659,7 @@ private:
      * ------------------------------------------------------------
      */
 
-    void configure_firewall();
+    bool configure_firewall();
 
     void check_firewall();
 
@@ -696,10 +837,12 @@ SambaControlCenter::SambaControlCenter()
     check_samba();
     folder_exists();
     check_services();
-    check_firewall();
+    set_status_unknown(
+        firewall_status,
+        "SIN VERIFICAR"
+    );
     check_ports();
 }
-
 
 
 /*
@@ -1024,16 +1167,20 @@ void SambaControlCenter::setup_ui()
     );
 
     btn_restart.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenter::restart_services
+        sigc::hide_return(
+            sigc::mem_fun(
+                *this,
+                &SambaControlCenter::restart_services
+            )
         )
     );
 
     btn_firewall.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenter::configure_firewall
+        sigc::hide_return(
+            sigc::mem_fun(
+                *this,
+                &SambaControlCenter::configure_firewall
+            )
         )
     );
 
@@ -1683,55 +1830,13 @@ bool SambaControlCenter::check_testparm()
  * ================================================================
  */
 
-void SambaControlCenter::backup_samba_config()
+
+std::string SambaControlCenter::prepare_samba_config_file()
 {
-    if (!fs::exists(samba_config))
-    {
-        append_log(
-            "[INFO] No existe smb.conf anterior."
-        );
-
-        return;
-    }
-
-    const std::string backup =
-        samba_config +
-        ".backup";
-
-    const std::string command =
-        "cp " +
-        shell_escape(samba_config) +
-        " " +
-        shell_escape(backup);
-
-    std::string output;
-
-    if (run_admin_command(
-            command,
-            output))
-    {
-        append_log(
-            "[BACKUP] " +
-            backup
-        );
-    }
-    else
-    {
-        append_log(output);
-    }
-}
-
-
-void SambaControlCenter::create_samba_config()
-{
-    append_section(
-        "CONFIGURACIÓN SMB.CONF"
-    );
-
-    backup_samba_config();
-
     /*
      * Generamos dinámicamente usuario y ruta.
+     * Sin privilegios: solo escribe el temporal.
+     * Devuelve la ruta del temporal o "" si falla.
      */
 
     std::ostringstream cfg;
@@ -1813,57 +1918,13 @@ void SambaControlCenter::create_samba_config()
                 "No fue posible crear el archivo temporal."
             );
 
-            return;
+            return "";
         }
 
         file << config;
     }
 
-    const std::string command =
-        "install -o root -g root -m 0644 " +
-        shell_escape(temp) +
-        " " +
-        shell_escape(samba_config) +
-        " && rm -f " +
-        shell_escape(temp);
-
-    std::string output;
-
-    if (run_admin_command(
-            command,
-            output))
-    {
-        append_log(
-            "[OK] smb.conf actualizado."
-        );
-
-        append_log(
-            "Share: [compartida]"
-        );
-
-        append_log(
-            "Path: " +
-            shared_folder
-        );
-
-        append_log(
-            "User: " +
-            samba_user
-        );
-    }
-    else
-    {
-        append_log(output);
-
-        std::remove(
-            temp.c_str()
-        );
-
-        show_error(
-            "Samba",
-            "No fue posible modificar smb.conf."
-        );
-    }
+    return temp;
 }
 
 
@@ -1916,12 +1977,12 @@ void SambaControlCenter::configure_samba()
         "CONFIGURAR SAMBA"
     );
 
-    create_shared_folder();
-
-    create_samba_config();
-
-    if (!validate_samba_config())
+    if (!command_exists("testparm"))
     {
+        append_log(
+            "[ERROR] testparm no está instalado."
+        );
+
         show_error(
             "Samba",
             "La configuración no pasó testparm."
@@ -1930,11 +1991,439 @@ void SambaControlCenter::configure_samba()
         return;
     }
 
+    /*
+     * Preparación sin privilegios: generar el temporal.
+     */
+
+    const std::string temp =
+        prepare_samba_config_file();
+
+    if (temp.empty())
+        return;
+
+    const bool had_previous =
+        fs::exists(samba_config);
+
+    const bool has_nmbd =
+        command_exists("nmbd");
+
+    const bool has_ufw =
+        command_exists("ufw");
+
+    /*
+     * Todos los pasos con privilegios viajan en UN solo
+     * script: una única autorización para toda la acción.
+     */
+
+    std::string script =
+        "F=0\n";
+
+    script += batch_step(
+        "folder",
+        "mkdir -p " +
+            shell_escape(shared_folder) +
+            " && chown -R " +
+            shell_escape(
+                samba_user + ":" + samba_user
+            ) +
+            " " +
+            shell_escape(shared_folder) +
+            " && chmod 0775 " +
+            shell_escape(shared_folder)
+    );
+
+    // Validar el temporal ANTES de tocar el smb.conf actual.
+    script += batch_step(
+        "testparm",
+        "testparm -s " + shell_escape(temp)
+    );
+
+    // Crear un respaldo único sin sobrescribir los anteriores.
+    script += batch_step(
+        "backup",
+        "if [ -f " + shell_escape(samba_config) + " ]; then "
+        "backup_path=" + shell_escape(samba_config + ".backup-") +
+            "$(date +%Y%m%d-%H%M%S)-$$; "
+        "cp -a -- " + shell_escape(samba_config) +
+            " \"$backup_path\" && "
+            "printf '[BACKUP] %s\\n' \"$backup_path\"; "
+        "else "
+            "printf '%s\\n' '[INFO] No existe smb.conf anterior.'; "
+        "fi"
+    );
+
+    // Instalar solamente si testparm y el respaldo tuvieron éxito.
+    script += batch_step(
+        "install",
+        "install -o root -g root -m 0644 " +
+            shell_escape(temp) +
+            " " +
+            shell_escape(samba_config) +
+            " && rm -f " +
+            shell_escape(temp)
+    );
+
+    script += batch_step(
+        "smbd",
+        "service smbd restart"
+    );
+
+    if (has_nmbd)
+    {
+        script += batch_step(
+            "nmbd",
+            "service nmbd restart"
+        );
+    }
+
+    if (has_ufw)
+    {
+        script += batch_step(
+            "ufw",
+            "ufw allow samba"
+        );
+    }
+
+    std::string output;
+
+    run_admin_command(
+        script,
+        output
+    );
+
+    std::size_t cursor = 0;
+
+    int rc = -1;
+
+    std::string segment;
+
+    /*
+     * CARPETA
+     */
+
+    append_section(
+        "CREACIÓN DE CARPETA RED"
+    );
+
+    segment =
+        batch_take_segment(
+            output,
+            cursor,
+            "folder",
+            rc
+        );
+
+    if (!segment.empty())
+        append_log(segment);
+
+    if (rc == -1)
+    {
+        std::remove(temp.c_str());
+
+        show_error(
+            "Samba",
+            "Autorización denegada o cancelada."
+        );
+
+        return;
+    }
+
+    if (rc != 0)
+    {
+        set_status(
+            folder_status,
+            "ERROR",
+            false
+        );
+
+        std::remove(temp.c_str());
+
+        show_error(
+            "Samba",
+            "No se pudo crear o preparar la carpeta compartida."
+        );
+
+        return;
+    }
+
+    append_log(
+        "[OK] Carpeta creada/verificada."
+    );
+
+    append_log(
+        "Ruta: " +
+        shared_folder
+    );
+
+    set_status(
+        folder_status,
+        "OK - 775",
+        true
+    );
+
+    /*
+     * TESTPARM: validar el archivo temporal antes de instalarlo.
+     */
+
+    append_section(
+        "TESTPARM"
+    );
+
+    segment =
+        batch_take_segment(
+            output,
+            cursor,
+            "testparm",
+            rc
+        );
+
+    if (!segment.empty())
+        append_log(segment);
+
+    if (rc != 0)
+    {
+        append_log(
+            "[ERROR] testparm rechazó la configuración temporal."
+        );
+
+        std::remove(temp.c_str());
+
+        show_error(
+            "Samba",
+            "La configuración no pasó testparm."
+        );
+
+        return;
+    }
+
+    append_log(
+        "[OK] Configuración temporal válida."
+    );
+
+    /*
+     * SMB.CONF: respaldo e instalación
+     */
+
+    append_section(
+        "CONFIGURACIÓN SMB.CONF"
+    );
+
+    segment =
+        batch_take_segment(
+            output,
+            cursor,
+            "backup",
+            rc
+        );
+
+    if (!segment.empty())
+        append_log(segment);
+
+    if (rc != 0)
+    {
+        append_log("[ERROR] No se pudo respaldar smb.conf.");
+
+        std::remove(temp.c_str());
+
+        show_error(
+            "Samba",
+            "No se pudo respaldar smb.conf. Revisa el registro."
+        );
+
+        return;
+    }
+
+    segment =
+        batch_take_segment(
+            output,
+            cursor,
+            "install",
+            rc
+        );
+
+    if (!segment.empty())
+        append_log(segment);
+
+    if (rc != 0)
+    {
+        std::remove(temp.c_str());
+
+        show_error(
+            "Samba",
+            "No se pudo instalar smb.conf. Revisa el registro."
+        );
+
+        return;
+    }
+
+    append_log(
+        "[OK] smb.conf actualizado."
+    );
+
+    append_log(
+        "Share: [compartida]"
+    );
+
+    append_log(
+        "Path: " +
+        shared_folder
+    );
+
+    append_log(
+        "User: " +
+        samba_user
+    );
+
+    /*
+     * USUARIO SAMBA (sin privilegios)
+     */
+
     create_samba_user();
 
-    restart_services();
+    /*
+     * SERVICIOS
+     */
 
-    configure_firewall();
+    append_section(
+        "REINICIAR SAMBA"
+    );
+
+    segment =
+        batch_take_segment(
+            output,
+            cursor,
+            "smbd",
+            rc
+        );
+
+    append_log(
+        "Reiniciando smbd..."
+    );
+
+    if (!segment.empty())
+        append_log(segment);
+
+    const bool smbd_ok =
+        rc == 0;
+
+    set_status(
+        smbd_status,
+        smbd_ok ? "RESTART OK" : "ERROR",
+        smbd_ok
+    );
+
+    if (!smbd_ok)
+    {
+        append_log("[ERROR] No se pudo reiniciar smbd.");
+
+        show_error(
+            "Samba",
+            "Falló el reinicio de uno o más servicios."
+        );
+
+        return;
+    }
+
+    if (has_nmbd)
+    {
+        segment =
+            batch_take_segment(
+                output,
+                cursor,
+                "nmbd",
+                rc
+            );
+
+        append_log(
+            "Reiniciando nmbd..."
+        );
+
+        if (!segment.empty())
+            append_log(segment);
+
+        const bool nmbd_ok =
+            rc == 0;
+
+        set_status(
+            nmbd_status,
+            nmbd_ok ? "RESTART OK" : "ERROR",
+            nmbd_ok
+        );
+
+        if (!nmbd_ok)
+        {
+            append_log("[ERROR] No se pudo reiniciar nmbd.");
+
+            show_error(
+                "Samba",
+                "Falló el reinicio de uno o más servicios."
+            );
+
+            return;
+        }
+    }
+    else
+    {
+        append_log(
+            "[INFO] nmbd no está disponible."
+        );
+    }
+
+    /*
+     * FIREWALL
+     */
+
+    append_section(
+        "FIREWALL UFW"
+    );
+
+    if (!has_ufw)
+    {
+        append_log(
+            "UFW no está instalado."
+        );
+    }
+    else
+    {
+        segment =
+            batch_take_segment(
+                output,
+                cursor,
+                "ufw",
+                rc
+            );
+
+        if (!segment.empty())
+            append_log(segment);
+
+        if (rc != 0)
+        {
+            append_log("[ERROR] No se pudo aplicar la regla de UFW.");
+
+            set_status(
+                firewall_status,
+                "ERROR",
+                false
+            );
+
+            show_error(
+                "Samba",
+                "No se pudo configurar UFW. Revisa el registro."
+            );
+
+            return;
+        }
+
+        append_log(
+            "[OK] Perfil Samba permitido en UFW."
+        );
+
+        set_status(
+            firewall_status,
+            "REGLA APLICADA",
+            true
+        );
+    }
 
     check_ports();
 
@@ -2007,7 +2496,7 @@ bool SambaControlCenter::folder_exists()
 }
 
 
-void SambaControlCenter::create_shared_folder()
+bool SambaControlCenter::create_shared_folder()
 {
     append_section(
         "CREACIÓN DE CARPETA RED"
@@ -2047,6 +2536,7 @@ void SambaControlCenter::create_shared_folder()
             "OK - 775",
             true
         );
+        return true;
     }
     else
     {
@@ -2057,6 +2547,7 @@ void SambaControlCenter::create_shared_folder()
             "ERROR",
             false
         );
+        return false;
     }
 }
 
@@ -2075,47 +2566,44 @@ void SambaControlCenter::fix_folder_permissions()
 
 bool SambaControlCenter::samba_user_exists()
 {
-    if (!command_exists(
-            "pdbedit"))
+    if (!command_exists("pdbedit"))
     {
+        append_log("[ERROR] No se encontró el comando pdbedit.");
         return false;
     }
 
     std::string output;
 
-    const std::string command =
-        "pdbedit -L 2>/dev/null";
-
-    output =
-        get_command_output(
-            command
-        );
-
-    std::istringstream stream(
+    const bool ok = run_admin_command(
+        "pdbedit -L",
         output
     );
 
+    if (!ok)
+    {
+        append_log(
+            "[ERROR] No se pudo consultar la base de usuarios Samba."
+        );
+        append_log(output);
+        return false;
+    }
+
+    std::istringstream stream(output);
     std::string line;
 
-    while (
-        std::getline(
-            stream,
-            line
-        )
-    )
+    while (std::getline(stream, line))
     {
-        const auto pos =
-            line.find(':');
+        const auto pos = line.find(':');
 
         const std::string user =
             pos == std::string::npos
                 ? trim(line)
-                : trim(
-                    line.substr(0, pos)
-                  );
+                : trim(line.substr(0, pos));
 
         if (user == samba_user)
+        {
             return true;
+        }
     }
 
     return false;
@@ -2342,55 +2830,8 @@ void SambaControlCenter::set_samba_password(
  * ================================================================
  */
 
-void SambaControlCenter::restart_smbd()
-{
-    append_log(
-        "Reiniciando smbd..."
-    );
 
-    std::string output;
-
-    const bool ok =
-        run_admin_command(
-            "service smbd restart",
-            output
-        );
-
-    append_log(output);
-
-    set_status(
-        smbd_status,
-        ok ? "RESTART OK" : "ERROR",
-        ok
-    );
-}
-
-
-void SambaControlCenter::restart_nmbd()
-{
-    append_log(
-        "Reiniciando nmbd..."
-    );
-
-    std::string output;
-
-    const bool ok =
-        run_admin_command(
-            "service nmbd restart",
-            output
-        );
-
-    append_log(output);
-
-    set_status(
-        nmbd_status,
-        ok ? "RESTART OK" : "ERROR",
-        ok
-    );
-}
-
-
-void SambaControlCenter::restart_services()
+bool SambaControlCenter::restart_services()
 {
     append_section(
         "REINICIAR SAMBA"
@@ -2402,19 +2843,103 @@ void SambaControlCenter::restart_services()
             "[ERROR] smbd no está instalado."
         );
 
-        return;
+        return false;
     }
 
-    restart_smbd();
+    const bool has_nmbd =
+        command_exists("nmbd");
 
     /*
-     * nmbd puede no existir en determinadas
-     * configuraciones modernas de Samba.
+     * Un solo pkexec para los dos servicios:
+     * una única autorización por acción.
      */
 
-    if (command_exists("nmbd"))
+    std::string script =
+        "F=0\n";
+
+    script += batch_step(
+        "smbd",
+        "service smbd restart"
+    );
+
+    if (has_nmbd)
     {
-        restart_nmbd();
+        script += batch_step(
+            "nmbd",
+            "service nmbd restart"
+        );
+    }
+
+    std::string output;
+
+    run_admin_command(
+        script,
+        output
+    );
+
+    std::size_t cursor = 0;
+
+    int rc_smbd = -1;
+
+    const std::string out_smbd =
+        batch_take_segment(
+            output,
+            cursor,
+            "smbd",
+            rc_smbd
+        );
+
+    append_log(
+        "Reiniciando smbd..."
+    );
+
+    if (!out_smbd.empty())
+        append_log(out_smbd);
+
+    const bool smbd_ok =
+        rc_smbd == 0;
+
+    set_status(
+        smbd_status,
+        smbd_ok ? "RESTART OK" : "ERROR",
+        smbd_ok
+    );
+
+    if (!smbd_ok)
+        append_log("[ERROR] No se pudo reiniciar smbd.");
+
+    bool nmbd_ok = true;
+
+    if (has_nmbd)
+    {
+        int rc_nmbd = -1;
+
+        const std::string out_nmbd =
+            batch_take_segment(
+                output,
+                cursor,
+                "nmbd",
+                rc_nmbd
+            );
+
+        append_log(
+            "Reiniciando nmbd..."
+        );
+
+        if (!out_nmbd.empty())
+            append_log(out_nmbd);
+
+        nmbd_ok =
+            rc_nmbd == 0;
+
+        set_status(
+            nmbd_status,
+            nmbd_ok ? "RESTART OK" : "ERROR",
+            nmbd_ok
+        );
+
+        if (!nmbd_ok)
+            append_log("[ERROR] No se pudo reiniciar nmbd.");
     }
     else
     {
@@ -2423,7 +2948,10 @@ void SambaControlCenter::restart_services()
         );
     }
 
-    check_services();
+    if (smbd_ok && nmbd_ok)
+        check_services();
+
+    return smbd_ok && nmbd_ok;
 }
 
 
@@ -2441,7 +2969,7 @@ void SambaControlCenter::check_services()
 
     const std::string smbd =
         execute_command(
-            "service smbd status",
+            service_command("smbd", "status"),
             &rc1
         );
 
@@ -2477,7 +3005,7 @@ void SambaControlCenter::check_services()
 
         const std::string nmbd =
             execute_command(
-                "service nmbd status",
+                service_command("nmbd", "status"),
                 &rc2
             );
 
@@ -2523,7 +3051,7 @@ void SambaControlCenter::check_services()
  * ================================================================
  */
 
-void SambaControlCenter::configure_firewall()
+bool SambaControlCenter::configure_firewall()
 {
     append_section(
         "FIREWALL UFW"
@@ -2535,7 +3063,7 @@ void SambaControlCenter::configure_firewall()
             "UFW no está instalado."
         );
 
-        return;
+        return true;
     }
 
     std::string output;
@@ -2548,14 +3076,15 @@ void SambaControlCenter::configure_firewall()
 
     append_log(output);
 
-    check_firewall();
-
-    if (ok)
+    if (!ok)
     {
-        append_log(
-            "[OK] Perfil Samba permitido en UFW."
-        );
+        append_log("[ERROR] No se pudo aplicar la regla de UFW.");
+        set_status(firewall_status, "ERROR", false);
+        return false;
     }
+    append_log("[OK] Perfil Samba permitido en UFW.");
+    set_status(firewall_status, "REGLA APLICADA", true);
+    return true;
 }
 
 
