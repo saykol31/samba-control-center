@@ -458,6 +458,56 @@ static std::string batch_take_segment(
 }
 
 /*
+ * Paso de lote de SOLO LECTURA: se ejecuta siempre, sin depender de
+ * que los pasos anteriores hayan tenido éxito. batch_step sigue
+ * siendo el correcto para operaciones que modifican el sistema
+ * (deben detenerse tras un fallo); las lecturas independientes —
+ * ufw status, pdbedit -L — no deben bloquearse entre sí.
+ * Mismos marcadores SCC_BEGIN / SCC_END: batch_take_segment lo
+ * consume igual que un paso normal.
+ */
+static std::string batch_step_always(
+    const std::string& name,
+    const std::string& command)
+{
+    return
+        command +
+        "; RC=$?;\n"
+        "echo SCC_RC_" +
+        name +
+        "=$RC\n";
+}
+
+
+/*
+ * Busca un usuario en la salida de "pdbedit -L" (una línea por
+ * usuario: nombre:uid:...). Devuelve true si aparece.
+ * Es el bucle que antes vivía en samba_user_exists().
+ */
+static bool pdbedit_list_has_user(
+    const std::string& output,
+    const std::string& user)
+{
+    std::istringstream stream(output);
+    std::string line;
+
+    while (std::getline(stream, line))
+    {
+        const auto pos = line.find(':');
+
+        const std::string name =
+            pos == std::string::npos
+                ? trim(line)
+                : trim(line.substr(0, pos));
+
+        if (name == user)
+            return true;
+    }
+
+    return false;
+}
+
+/*
  * ================================================================
  * CLASE PRINCIPAL
  * ================================================================
@@ -632,9 +682,10 @@ private:
      * ------------------------------------------------------------
      */
 
-    bool samba_user_exists();
-
-    void create_samba_user();
+    void create_samba_user(
+        int pdbedit_rc,
+        const std::string& pdbedit_output
+    );
 
     void show_password_dialog();
 
@@ -661,7 +712,10 @@ private:
 
     bool configure_firewall();
 
-    void check_firewall();
+    void apply_firewall_output(
+        bool ok,
+        const std::string& output
+    );
 
     /*
      * ------------------------------------------------------------
@@ -2010,6 +2064,9 @@ void SambaControlCenter::configure_samba()
     const bool has_ufw =
         command_exists("ufw");
 
+    const bool has_pdbedit =
+        command_exists("pdbedit");
+
     /*
      * Todos los pasos con privilegios viajan en UN solo
      * script: una única autorización para toda la acción.
@@ -2062,6 +2119,16 @@ void SambaControlCenter::configure_samba()
             " && rm -f " +
             shell_escape(temp)
     );
+
+    // Solo lectura (la lista de usuarios Samba): paso "siempre",
+    // no detiene ni lo detiene la cadena de modificaciones.
+    if (has_pdbedit)
+    {
+        script += batch_step_always(
+            "users",
+            "pdbedit -L"
+        );
+    }
 
     script += batch_step(
         "smbd",
@@ -2275,10 +2342,29 @@ void SambaControlCenter::configure_samba()
     );
 
     /*
-     * USUARIO SAMBA (sin privilegios)
+     * USUARIO SAMBA: consume el segmento "users" del lote
+     * (pdbedit -L ya corrió dentro de la única autorización).
+     * -3 = pdbedit no instalado (no hubo paso en el lote).
      */
 
-    create_samba_user();
+    std::string users_segment;
+    int users_rc = -3;
+
+    if (has_pdbedit)
+    {
+        users_segment =
+            batch_take_segment(
+                output,
+                cursor,
+                "users",
+                users_rc
+            );
+    }
+
+    create_samba_user(
+        users_rc,
+        users_segment
+    );
 
     /*
      * SERVICIOS
@@ -2564,59 +2650,45 @@ void SambaControlCenter::fix_folder_permissions()
  * ================================================================
  */
 
-bool SambaControlCenter::samba_user_exists()
-{
-    if (!command_exists("pdbedit"))
-    {
-        append_log("[ERROR] No se encontró el comando pdbedit.");
-        return false;
-    }
-
-    std::string output;
-
-    const bool ok = run_admin_command(
-        "pdbedit -L",
-        output
-    );
-
-    if (!ok)
-    {
-        append_log(
-            "[ERROR] No se pudo consultar la base de usuarios Samba."
-        );
-        append_log(output);
-        return false;
-    }
-
-    std::istringstream stream(output);
-    std::string line;
-
-    while (std::getline(stream, line))
-    {
-        const auto pos = line.find(':');
-
-        const std::string user =
-            pos == std::string::npos
-                ? trim(line)
-                : trim(line.substr(0, pos));
-
-        if (user == samba_user)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-
-void SambaControlCenter::create_samba_user()
+void SambaControlCenter::create_samba_user(
+    int pdbedit_rc,
+    const std::string& pdbedit_output)
 {
     append_section(
         "USUARIO SAMBA"
     );
 
-    if (samba_user_exists())
+    /*
+     * El resultado de "pdbedit -L" llega del paso "users" del
+     * lote (una sola autorización). pdbedit_rc:
+     *
+     * -3    pdbedit no está instalado.
+     *  0    la consulta se hizo: pdbedit_output es la lista.
+     * otro  la consulta no se pudo hacer (fallo o cancelación):
+     *       NO se afirma que la cuenta no exista.
+     */
+
+    if (pdbedit_rc == -3)
+    {
+        append_log(
+            "[ERROR] No se encontró el comando pdbedit."
+        );
+
+        return;
+    }
+
+    if (pdbedit_rc != 0)
+    {
+        append_log(
+            "[INFO] No se pudo verificar el usuario Samba."
+        );
+
+        return;
+    }
+
+    if (pdbedit_list_has_user(
+            pdbedit_output,
+            samba_user))
     {
         append_log(
             "[OK] Usuario Samba '" +
@@ -3088,30 +3160,17 @@ bool SambaControlCenter::configure_firewall()
 }
 
 
-void SambaControlCenter::check_firewall()
+/*
+ * Aplica el resultado de "ufw status": imprime la salida, detecta
+ * si Samba está permitido y actualiza el estado del panel.
+ * La salida llega del segmento "ufw" del lote del diagnóstico
+ * (una sola autorización); era la segunda mitad de
+ * check_firewall().
+ */
+void SambaControlCenter::apply_firewall_output(
+    bool ok,
+    const std::string& output)
 {
-    append_section(
-        "ESTADO UFW"
-    );
-
-    if (!command_exists("ufw"))
-    {
-        set_status_unknown(
-            firewall_status,
-            "NO INSTALADO"
-        );
-
-        return;
-    }
-
-    std::string output;
-
-    const bool ok =
-        run_admin_command(
-            "ufw status",
-            output
-        );
-
     append_log(output);
 
     if (!ok)
@@ -4062,6 +4121,49 @@ void SambaControlCenter::full_diagnostic()
         samba_user
     );
 
+    /*
+     * Autorización única del diagnóstico: las dos consultas con
+     * root (ufw status y pdbedit -L) corren en UN solo pkexec.
+     * Son lecturas independientes: batch_step_always no detiene
+     * una si la otra falla. Los segmentos se consumen en las
+     * secciones ESTADO UFW y USUARIO SAMBA, más abajo.
+     */
+
+    const bool diag_has_ufw =
+        command_exists("ufw");
+
+    const bool diag_has_pdbedit =
+        command_exists("pdbedit");
+
+    std::string diag_script;
+
+    if (diag_has_ufw)
+    {
+        diag_script += batch_step_always(
+            "ufw",
+            "ufw status"
+        );
+    }
+
+    if (diag_has_pdbedit)
+    {
+        diag_script += batch_step_always(
+            "users",
+            "pdbedit -L"
+        );
+    }
+
+    std::string diag_output;
+    std::size_t diag_cursor = 0;
+
+    if (!diag_script.empty())
+    {
+        run_admin_command(
+            diag_script,
+            diag_output
+        );
+    }
+
     check_dependencies();
 
     check_samba();
@@ -4070,7 +4172,39 @@ void SambaControlCenter::full_diagnostic()
 
     check_services();
 
-    check_firewall();
+    /*
+     * ESTADO UFW: consume el segmento "ufw" del lote.
+     */
+
+    append_section(
+        "ESTADO UFW"
+    );
+
+    if (!diag_has_ufw)
+    {
+        set_status_unknown(
+            firewall_status,
+            "NO INSTALADO"
+        );
+    }
+    else
+    {
+        std::string ufw_segment;
+        int ufw_rc = -1;
+
+        ufw_segment =
+            batch_take_segment(
+                diag_output,
+                diag_cursor,
+                "ufw",
+                ufw_rc
+            );
+
+        apply_firewall_output(
+            ufw_rc == 0,
+            ufw_segment
+        );
+    }
 
     check_ports();
 
@@ -4090,11 +4224,47 @@ void SambaControlCenter::full_diagnostic()
         "USUARIO SAMBA"
     );
 
-    append_log(
-        samba_user_exists()
-            ? "[OK] Usuario Samba existe."
-            : "[FALTA] Usuario Samba no existe."
-    );
+    if (!diag_has_pdbedit)
+    {
+        append_log(
+            "[ERROR] No se encontró el comando pdbedit."
+        );
+    }
+    else
+    {
+        std::string users_segment;
+        int users_rc = -1;
+
+        users_segment =
+            batch_take_segment(
+                diag_output,
+                diag_cursor,
+                "users",
+                users_rc
+            );
+
+        if (users_rc != 0)
+        {
+            // Fallo o cancelación: NO se afirma que no exista.
+            append_log(
+                "[INFO] No se pudo verificar el usuario Samba."
+            );
+        }
+        else if (pdbedit_list_has_user(
+                     users_segment,
+                     samba_user))
+        {
+            append_log(
+                "[OK] Usuario Samba existe."
+            );
+        }
+        else
+        {
+            append_log(
+                "[FALTA] Usuario Samba no existe."
+            );
+        }
+    }
 
     append_section(
         "PROCESOS SAMBA"
