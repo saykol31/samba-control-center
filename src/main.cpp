@@ -44,6 +44,7 @@
 #include <array>
 #include <cerrno>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -52,6 +53,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
@@ -571,6 +573,8 @@ private:
     Gtk::Button btn_neighbors;
     Gtk::Button btn_windows;
     Gtk::Button btn_tcp445;
+   Gtk::Button btn_config_win;
+   Gtk::Button btn_scan_red;
     Gtk::Button btn_ping;
     Gtk::Button btn_smbclient;
     Gtk::Button btn_tcpdump;
@@ -689,6 +693,8 @@ private:
 
     void show_password_dialog();
 
+   void configure_windows();
+
     void set_samba_password(
         const std::string& password
     );
@@ -743,6 +749,7 @@ private:
     void show_routing();
 
     void show_neighbors();
+   void scan_network();
 
     /*
      * ------------------------------------------------------------
@@ -1050,7 +1057,57 @@ void SambaControlCenter::setup_ui()
         "Limpiar consola"
     );
 
-    /*
+   // Botones adicionales de red
+
+   configure_button(
+       btn_interfaces,
+       "INTERFACES",
+       "Mostrar las interfaces de red disponibles"
+   );
+
+   configure_button(
+       btn_routes,
+       "RUTAS DE RED",
+       "Mostrar la tabla de rutas del sistema"
+   );
+
+   configure_button(
+       btn_gateway,
+       "PUERTA DE ENLACE",
+       "Mostrar la puerta de enlace de la red"
+   );
+
+   configure_button(
+       btn_neighbors,
+       "VECINOS DE RED",
+       "Mostrar vecinos ARP y entradas de red"
+   );
+
+   configure_button(
+       btn_windows,
+       "RED WINDOWS",
+       "Mostrar información de red del equipo Windows"
+   );
+
+   configure_button(
+       btn_tcp445,
+       "TCP 445 WINDOWS",
+       "Probar conectividad TCP con el puerto 445 de Windows"
+   );
+
+   configure_button(
+       btn_config_win,
+       "CONFIG WIN",
+       "Configurar la dirección IPv4 del equipo Windows"
+   );
+
+
+   configure_button(
+       btn_scan_red,
+       "ESCANEAR RED",
+       "Descubrir equipos en las subredes IPv4 locales"
+   );
+/*
      * ------------------------------------------------
      * DISTRIBUCIÓN DE BOTONES
      * ------------------------------------------------
@@ -1149,7 +1206,58 @@ void SambaControlCenter::setup_ui()
         2
     );
 
-    main_box.append(
+
+   // Filas adicionales para diagnóstico de red
+
+   button_grid->attach(
+       btn_interfaces,
+       0,
+       3
+   );
+
+   button_grid->attach(
+       btn_routes,
+       1,
+       3
+   );
+
+   button_grid->attach(
+       btn_gateway,
+       2,
+       3
+   );
+
+   button_grid->attach(
+       btn_neighbors,
+       3,
+       3
+   );
+
+   button_grid->attach(
+       btn_windows,
+       0,
+       4
+   );
+
+   button_grid->attach(
+       btn_tcp445,
+       1,
+       4
+   );
+
+   button_grid->attach(
+       btn_config_win,
+       2,
+       4
+   );
+
+
+   button_grid->attach(
+       btn_scan_red,
+       3,
+       4
+   );
+main_box.append(
         *button_grid
     );
 
@@ -1286,7 +1394,217 @@ void SambaControlCenter::setup_ui()
             &SambaControlCenter::clear_log
         )
     );
+
+   // Señales de los seis botones adicionales
+
+   btn_interfaces.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::show_interfaces
+       )
+   );
+
+   btn_routes.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::show_routes
+       )
+   );
+
+   btn_gateway.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::show_gateway
+       )
+   );
+
+   btn_neighbors.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::show_neighbors
+       )
+   );
+
+   btn_windows.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::show_windows_network
+       )
+   );
+
+   btn_tcp445.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::test_windows_tcp445
+       )
+   );
+
+   btn_config_win.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::configure_windows
+       )
+   );
+
+   btn_scan_red.signal_clicked().connect(
+       sigc::mem_fun(
+           *this,
+           &SambaControlCenter::scan_network
+       )
+   );
 }
+
+
+void SambaControlCenter::configure_windows()
+{
+    auto dialog = Gtk::make_managed<Gtk::Dialog>();
+    dialog->set_transient_for(*this);
+    dialog->set_modal(true);
+    dialog->set_title("Configurar equipo Windows");
+
+    dialog->add_button("_Cancelar", Gtk::ResponseType::CANCEL);
+    dialog->add_button("_Guardar", Gtk::ResponseType::OK);
+    dialog->set_default_response(Gtk::ResponseType::OK);
+
+    auto* content = dialog->get_content_area();
+    content->set_spacing(8);
+    content->set_margin_start(16);
+    content->set_margin_end(16);
+    content->set_margin_top(16);
+    content->set_margin_bottom(16);
+
+    auto* label = Gtk::make_managed<Gtk::Label>(
+        "Dirección IPv4 del equipo Windows:"
+    );
+    label->set_halign(Gtk::Align::START);
+
+    auto* address_entry = Gtk::make_managed<Gtk::Entry>();
+    address_entry->set_placeholder_text("Ejemplo: 192.168.1.50");
+    address_entry->set_text(windows_ip);
+    address_entry->set_activates_default(true);
+
+    content->append(*label);
+    content->append(*address_entry);
+
+    dialog->signal_response().connect(
+        [this, dialog, address_entry](int response) {
+            if (response != static_cast<int>(Gtk::ResponseType::OK)) {
+                dialog->close();
+                return;
+            }
+
+            const std::string address = trim(
+                address_entry->get_text().raw()
+            );
+
+            if (!is_valid_ipv4(address)) {
+                show_error(
+                    "Dirección no válida",
+                    "Introduce una dirección IPv4 válida, por ejemplo "
+                    "192.168.1.50."
+                );
+                return;
+            }
+
+            const fs::path config_path = windows_config_file();
+            std::error_code ec;
+
+            fs::create_directories(config_path.parent_path(), ec);
+            if (ec) {
+                show_error(
+                    "Error de configuración",
+                    "No se pudo crear el directorio de configuración: " +
+                    ec.message()
+                );
+                return;
+            }
+
+            std::vector<std::string> lines;
+            {
+                std::ifstream input(config_path);
+                if (input) {
+                    std::string line;
+                    while (std::getline(input, line)) {
+                        const std::string clean = trim(line);
+                        if (clean.rfind("windows_ip=", 0) == 0) {
+                            continue;
+                        }
+                        lines.push_back(line);
+                    }
+                    if (input.bad()) {
+                        show_error(
+                            "Error de configuración",
+                            "No se pudo leer el archivo: " +
+                            config_path.string()
+                        );
+                        return;
+                    }
+                } else if (fs::exists(config_path, ec) && !ec) {
+                    show_error(
+                        "Error de configuración",
+                        "No se pudo abrir el archivo: " +
+                        config_path.string()
+                    );
+                    return;
+                }
+            }
+
+            const fs::path temp_path =
+                config_path.string() + ".tmp";
+
+            {
+                std::ofstream updated(temp_path, std::ios::trunc);
+                if (!updated) {
+                    show_error(
+                        "Error de configuración",
+                        "No se pudo crear el archivo temporal: " +
+                        temp_path.string()
+                    );
+                    return;
+                }
+
+                for (const auto& line : lines) {
+                    updated << line << '\n';
+                }
+                updated << "windows_ip=" << address << '\n';
+                updated.close();
+
+                if (!updated) {
+                    fs::remove(temp_path, ec);
+                    show_error(
+                        "Error de configuración",
+                        "No se pudo escribir el archivo temporal."
+                    );
+                    return;
+                }
+            }
+
+            fs::rename(temp_path, config_path, ec);
+            if (ec) {
+                const std::string error = ec.message();
+                std::error_code ignored;
+                fs::remove(temp_path, ignored);
+                show_error(
+                    "Error de configuración",
+                    "No se pudo guardar el archivo de configuración: " +
+                    error
+                );
+                return;
+            }
+
+            windows_ip = address;
+            append_section("CONFIGURACIÓN WINDOWS");
+            append_log("Destino Windows: " + windows_ip);
+            append_log("Configuración guardada en: " +
+                       config_path.string());
+
+            dialog->close();
+        }
+    );
+
+    dialog->present();
+}
+
 
 void SambaControlCenter::configure_button(
     Gtk::Button& button,
@@ -3348,6 +3666,343 @@ void SambaControlCenter::check_ports()
  * INFORMACIÓN DE INTERFACES
  * ================================================================
  */
+
+
+/*
+ * Descubre equipos en las subredes IPv4 locales.
+ * Solo utiliza Nmap en modo de descubrimiento (-sn).
+ */
+void SambaControlCenter::scan_network()
+{
+    append_section("ESCANEAR RED");
+
+    if (!command_exists("nmap"))
+    {
+        append_log("[ERROR] Nmap no está instalado.");
+        append_log("Instálalo con: sudo apt install nmap");
+        return;
+    }
+
+    int ip_rc = -1;
+    const std::string addr_output =
+        execute_command(
+            "ip -o -4 addr show up scope global",
+            &ip_rc
+        );
+
+    if (ip_rc != 0)
+    {
+        append_log("[ERROR] No se pudieron consultar las interfaces IPv4.");
+        append_log(addr_output);
+        return;
+    }
+
+    std::vector<std::string> subnets;
+    std::istringstream lines(addr_output);
+    std::string line;
+
+    while (std::getline(lines, line))
+    {
+        std::istringstream fields(line);
+        std::string index;
+        std::string interface_name;
+        std::string family;
+        std::string cidr;
+
+        if (!(fields >> index >> interface_name >> family >> cidr))
+            continue;
+
+        if (family != "inet")
+            continue;
+
+        const std::size_t slash = cidr.find('/');
+        if (slash == std::string::npos)
+            continue;
+
+        const std::string address = cidr.substr(0, slash);
+        int prefix = -1;
+
+        try
+        {
+            prefix = std::stoi(cidr.substr(slash + 1));
+        }
+        catch (...)
+        {
+            continue;
+        }
+
+        if (prefix < 0 || prefix > 32)
+            continue;
+
+        in_addr parsed{};
+        if (inet_pton(AF_INET, address.c_str(), &parsed) != 1)
+            continue;
+
+        // Evitar redes excesivamente grandes: /20 o más estrechas.
+        if (prefix < 20)
+        {
+            append_log(
+                "[OMITIDA] " + interface_name + " " + cidr +
+                ": red demasiado grande para este escaneo."
+            );
+            continue;
+        }
+
+        const std::uint32_t mask =
+            prefix == 0
+                ? 0u
+                : (0xFFFFFFFFu << (32 - prefix));
+
+        const std::uint32_t network_host =
+            ntohl(parsed.s_addr) & mask;
+
+        in_addr network_address{};
+        network_address.s_addr = htonl(network_host);
+
+        char network_text[INET_ADDRSTRLEN]{};
+        if (!inet_ntop(
+                AF_INET,
+                &network_address,
+                network_text,
+                sizeof(network_text)))
+            continue;
+
+        const std::string subnet =
+            std::string(network_text) + "/" +
+            std::to_string(prefix);
+
+        if (std::find(
+                subnets.begin(),
+                subnets.end(),
+                subnet) == subnets.end())
+        {
+            subnets.push_back(subnet);
+        }
+    }
+
+    if (subnets.empty())
+    {
+        append_log(
+            "[INFO] No se encontraron subredes IPv4 aptas para escanear."
+        );
+        append_log(
+            "Comprueba que Ethernet o Wi-Fi estén conectados."
+        );
+        return;
+    }
+
+    append_log("Subredes detectadas:");
+    for (const auto& subnet : subnets)
+        append_log("  " + subnet);
+
+    append_log("");
+    append_log("Solicitando autorización para descubrir equipos...");
+    append_log("Se utilizará Nmap -sn; no se escanearán puertos.");
+
+    // Un único pkexec para todas las subredes detectadas.
+    std::string script = "set +e\n";
+    for (const auto& subnet : subnets)
+    {
+        script +=
+            "echo '\\n===== SUBRED " + subnet + " ====='\n";
+        script += "nmap -sn " + shell_escape(subnet) + "\n";
+    }
+
+    std::string output;
+    const bool ok = run_admin_command(script, output);
+
+
+    struct NetworkHost
+    {
+        std::string ip;
+        std::string hostname = "No identificado";
+        std::string mac = "No identificada";
+        std::string manufacturer = "No identificado";
+        std::string device = "No determinado";
+    };
+
+    std::vector<NetworkHost> hosts;
+    NetworkHost current;
+    bool have_host = false;
+
+    std::istringstream nmap_lines(output);
+    std::string nmap_line;
+
+    const std::string report_prefix = "Nmap scan report for ";
+    const std::string mac_prefix = "MAC Address: ";
+
+    while (std::getline(nmap_lines, nmap_line))
+    {
+        if (nmap_line.compare(
+                0, report_prefix.size(), report_prefix) == 0)
+        {
+            if (have_host)
+                hosts.push_back(current);
+
+            current = NetworkHost{};
+            have_host = true;
+
+            std::string report =
+                nmap_line.substr(report_prefix.size());
+
+            const std::size_t open_paren = report.rfind(" (");
+            const std::size_t close_paren = report.rfind(')');
+
+            if (open_paren != std::string::npos &&
+                close_paren == report.size() - 1 &&
+                open_paren < close_paren)
+            {
+                current.hostname = report.substr(0, open_paren);
+                current.ip = report.substr(
+                    open_paren + 2,
+                    close_paren - open_paren - 2);
+            }
+            else
+            {
+                current.ip = report;
+            }
+        }
+        else if (have_host &&
+                nmap_line.compare(
+                    0, mac_prefix.size(), mac_prefix) == 0)
+        {
+            std::string details =
+                nmap_line.substr(mac_prefix.size());
+
+            const std::size_t space = details.find(' ');
+            if (space != std::string::npos)
+            {
+                current.mac = details.substr(0, space);
+
+                const std::size_t open_paren = details.find('(');
+                const std::size_t close_paren = details.rfind(')');
+
+                if (open_paren != std::string::npos &&
+                    close_paren != std::string::npos &&
+                    close_paren > open_paren)
+                {
+                    current.manufacturer = details.substr(
+                        open_paren + 1,
+                        close_paren - open_paren - 1);
+                }
+            }
+            else if (!details.empty())
+            {
+                current.mac = details;
+            }
+        }
+    }
+
+    if (have_host)
+        hosts.push_back(current);
+
+    // Estimación prudente basada en nombres y fabricantes conocidos.
+    for (auto& host : hosts)
+    {
+        const std::string identity =
+            host.hostname + " " + host.manufacturer;
+
+        if (identity.find("iPhone") != std::string::npos ||
+            identity.find("iphone") != std::string::npos)
+            host.device = "Posible iPhone";
+        else if (identity.find("iPad") != std::string::npos ||
+                identity.find("ipad") != std::string::npos)
+            host.device = "Posible iPad";
+        else if (identity.find("MSI") != std::string::npos ||
+                identity.find("Micro-Star") != std::string::npos)
+            host.device = "Posible PC MSI";
+        else if (identity.find("Amazon") != std::string::npos ||
+                identity.find("amazon") != std::string::npos)
+            host.device = "Posible dispositivo Amazon";
+        else if (identity.find("Arris") != std::string::npos ||
+                identity.find("arris") != std::string::npos)
+            host.device = "Posible router/módem";
+        else if (identity.find("HP") != std::string::npos)
+            host.device = "Posible equipo HP";
+    }
+
+    auto fit_column = [](const std::string& value, std::size_t width)
+    {
+        std::string result = value;
+
+        if (result.size() > width)
+        {
+            if (width > 1)
+                result = result.substr(0, width - 1) + "~";
+            else
+                result = result.substr(0, width);
+        }
+
+        if (result.size() < width)
+            result.append(width - result.size(), ' ');
+
+        return result;
+    };
+
+    const std::size_t w_ip = 15;
+    const std::size_t w_host = 22;
+    const std::size_t w_mac = 17;
+    const std::size_t w_vendor = 22;
+    const std::size_t w_device = 25;
+
+    auto table_row = [&](const std::string& ip,
+                        const std::string& hostname,
+                        const std::string& mac,
+                        const std::string& manufacturer,
+                        const std::string& device)
+    {
+        return fit_column(ip, w_ip) + "  " +
+            fit_column(hostname, w_host) + "  " +
+            fit_column(mac, w_mac) + "  " +
+            fit_column(manufacturer, w_vendor) + "  " +
+            fit_column(device, w_device);
+    };
+
+    append_log("");
+    append_log(table_row(
+        "IP", "HOSTNAME", "MAC", "FABRICANTE", "POSIBLE DISPOSITIVO"));
+
+    append_log(std::string(
+        w_ip + w_host + w_mac + w_vendor + w_device + 8, '-'));
+
+    if (hosts.empty())
+    {
+        append_log("Nmap no devolvió equipos identificables.");
+    }
+    else
+    {
+        for (const auto& host : hosts)
+        {
+            append_log(table_row(
+                host.ip,
+                host.hostname,
+                host.mac,
+                host.manufacturer,
+                host.device));
+        }
+
+        append_log("");
+        append_log("Equipos encontrados: " +
+                std::to_string(hosts.size()));
+    }
+
+
+    if (!ok)
+    {
+        append_log(
+            "[ERROR] El escaneo falló, se canceló la autorización "
+            "o Nmap devolvió un error."
+        );
+        return;
+    }
+
+    append_log("");
+    append_log(
+        "[FIN] Descubrimiento terminado. Revisa las IP y los "
+        "nombres que Nmap haya podido identificar."
+    );
+}
+
 
 void SambaControlCenter::show_interfaces()
 {

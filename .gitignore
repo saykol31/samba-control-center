@@ -1,0 +1,14 @@
+# Directorios de compilación CMake
+/build/
+/src/build/
+cmake-build-*/
+
+# Archivos temporales de Python
+__pycache__/
+*.py[cod]
+
+# Archivos generados por herramientas
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile

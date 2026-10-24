@@ -25,12 +25,13 @@ Sistema Debian o derivado, con entorno de escritorio.
 ```bash
 sudo apt update
 sudo apt install build-essential cmake pkg-config libgtkmm-4.0-dev
+
+cd ~/samba-control-center
 cmake -S . -B build
-cmake --build build -j"$(nproc)"
+cmake --build build --parallel 2
 ```
 
 ## Ejecutar
-
 ```bash
 ./build/samba-control-center
 ```
