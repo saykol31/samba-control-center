@@ -28,7 +28,7 @@
  *  - prueba TCP 445
  *  - smbclient
  *  - tcpdump
- *
+ *  - Nmap
  * Compatible con:
  *
  *  MX Linux / Debian
@@ -1112,153 +1112,261 @@ void SambaControlCenter::setup_ui()
      * DISTRIBUCIÓN DE BOTONES
      * ------------------------------------------------
      *
-     * 4 columnas x 3 filas
+     * 4 columnas, agrupados por intención del usuario.
+     * Cada grupo lleva una fila de encabezado.
      *
-     * Fila 0:
+     * Grupo 1 · PUESTA EN MARCHA
      * DEPENDENCIAS
      * CONFIGURAR SAMBA
      * CONTRASEÑA SAMBA
      * REINICIAR SERVICIOS
      *
-     * Fila 1:
+     * Grupo 2 · CONECTAR CON WINDOWS
+     * ESCANEAR RED
+     * CONFIG WIN
+     * PING WINDOWS
+     * TCP 445 WINDOWS
+     *
+     * Grupo 3 · COMPROBACIÓN Y DIAGNÓSTICO
+     * DIAGNÓSTICO COMPLETO
      * FIREWALL
      * PUERTOS
-     * RED
-     * PING
-     *
-     * Fila 2:
      * SMBCLIENT
      * TCPDUMP
-     * DIAGNÓSTICO
-     * LIMPIAR
+     *
+     * Grupo 4 · CONSULTAS DE RED
+     * RED
+     * INTERFACES
+     * RUTAS
+     * GATEWAY
+     * VECINOS
+     * RED WINDOWS
+     *
+     * LIMPIAR va junto a la consola (debajo de la botonera).
      *
      */
+
+    /*
+     * Encabezados de grupo (fila completa, 4 columnas)
+     */
+
+    auto* header_start =
+        Gtk::make_managed<Gtk::Label>();
+
+    header_start->set_markup(
+        "<b>1 · PUESTA EN MARCHA</b>"
+    );
+
+    header_start->set_halign(
+        Gtk::Align::START
+    );
+
+    button_grid->attach(
+        *header_start,
+        0,
+        0,
+        4,
+        1
+    );
+
+
+    auto* header_windows =
+        Gtk::make_managed<Gtk::Label>();
+
+    header_windows->set_markup(
+        "<b>2 · CONECTAR CON WINDOWS</b>"
+    );
+
+    header_windows->set_halign(
+        Gtk::Align::START
+    );
+
+    header_windows->set_margin_top(
+        8
+    );
+
+    button_grid->attach(
+        *header_windows,
+        0,
+        2,
+        4,
+        1
+    );
+
+
+    auto* header_check =
+        Gtk::make_managed<Gtk::Label>();
+
+    header_check->set_markup(
+        "<b>3 · COMPROBACIÓN Y DIAGNÓSTICO</b>"
+    );
+
+    header_check->set_halign(
+        Gtk::Align::START
+    );
+
+    header_check->set_margin_top(
+        8
+    );
+
+    button_grid->attach(
+        *header_check,
+        0,
+        4,
+        4,
+        1
+    );
+
+
+    auto* header_info =
+        Gtk::make_managed<Gtk::Label>();
+
+    header_info->set_markup(
+        "<b>4 · CONSULTAS DE RED</b>"
+    );
+
+    header_info->set_halign(
+        Gtk::Align::START
+    );
+
+    header_info->set_margin_top(
+        8
+    );
+
+    button_grid->attach(
+        *header_info,
+        0,
+        7,
+        4,
+        1
+    );
+
 
     button_grid->attach(
         btn_install,
         0,
-        0
+        1
     );
 
     button_grid->attach(
         btn_configure,
         1,
-        0
+        1
     );
 
     button_grid->attach(
         btn_password,
         2,
-        0
+        1
     );
 
     button_grid->attach(
         btn_restart,
         3,
-        0
+        1
     );
 
     button_grid->attach(
         btn_firewall,
-        0,
-        1
+        1,
+        5
     );
 
     button_grid->attach(
         btn_ports,
-        1,
-        1
+        2,
+        5
     );
 
     button_grid->attach(
         btn_network,
-        2,
-        1
+        0,
+        8
     );
 
     button_grid->attach(
         btn_ping,
-        3,
-        1
+        2,
+        3
     );
 
     button_grid->attach(
         btn_smbclient,
-        0,
-        2
+        3,
+        5
     );
 
     button_grid->attach(
         btn_tcpdump,
-        1,
-        2
+        0,
+        6
     );
 
     button_grid->attach(
         btn_diagnose,
-        2,
-        2
+        0,
+        5
     );
 
-    button_grid->attach(
-        btn_clear,
-        3,
-        2
-    );
+    // btn_clear (LIMPIAR) va junto a la consola, ver sección CONSOLA / LOG.
 
 
    // Filas adicionales para diagnóstico de red
 
    button_grid->attach(
        btn_interfaces,
-       0,
-       3
+       1,
+       8
    );
 
    button_grid->attach(
        btn_routes,
-       1,
-       3
+       2,
+       8
    );
 
    button_grid->attach(
        btn_gateway,
-       2,
-       3
+       3,
+       8
    );
 
    button_grid->attach(
        btn_neighbors,
+       0,
+       9
+   );
+
+   button_grid->attach(
+       btn_windows,
+       1,
+       9
+   );
+
+   button_grid->attach(
+       btn_tcp445,
        3,
        3
    );
 
    button_grid->attach(
-       btn_windows,
-       0,
-       4
-   );
-
-   button_grid->attach(
-       btn_tcp445,
-       1,
-       4
-   );
-
-   button_grid->attach(
        btn_config_win,
-       2,
-       4
+       1,
+       3
    );
 
 
    button_grid->attach(
        btn_scan_red,
-       3,
-       4
+       0,
+       3
    );
 main_box.append(
         *button_grid
+    );
+
+    btn_configure.add_css_class(
+        "suggested-action"
     );
 
     /*
@@ -1292,6 +1400,14 @@ main_box.append(
 
     log_scroll.set_vexpand(
         true
+    );
+
+    btn_clear.set_halign(
+        Gtk::Align::END
+    );
+
+    main_box.append(
+        btn_clear
     );
 
     main_box.append(
