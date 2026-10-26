@@ -12,3 +12,12 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+
+# Compilación de la versión modular
+/build-modular/
+
+# Copia de trabajo modular conservada localmente
+/modular-v2/
+
+# Copia temporal antigua
+/src/main.cpp.back after nmap
