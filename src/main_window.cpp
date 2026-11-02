@@ -4,6 +4,7 @@
 #include "control_page.hpp"
 #include "user_page.hpp"
 #include "settings_page.hpp"
+#include "help_page.hpp"
 
 MainWindow::MainWindow() {
     set_title("Samba Control Center");
@@ -63,6 +64,7 @@ MainWindow::MainWindow() {
     notebook.append_page(*control_page, "CONTROL");
     notebook.append_page(*Gtk::make_managed<UserPage>(), "USER");
     notebook.append_page(*settings_page, "SETTINGS");
+    notebook.append_page(*Gtk::make_managed<HelpPage>(), "HELP");
 
     root_box.append(notebook);
 }
