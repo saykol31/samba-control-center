@@ -23,3 +23,5 @@ Makefile
 /src/main.cpp.back after nmap
 *.bak-*
 *.bak-*
+*.bak-*
+*:Zone.Identifier
