@@ -1737,65 +1737,90 @@ void SambaControlCenterPanel::check_dependencies()
 
 void SambaControlCenterPanel::install_dependencies()
 {
-    if (async_busy_)
+    append_section(
+        "INSTALACIÓN DE DEPENDENCIAS"
+    );
+
+    /*
+     * El mecanismo del Update de idec: la instalación
+     * no se esconde en un hilo — se abre una konsole
+     * que NO se cierra (--noclose), al lado de la
+     * interfaz, y el usuario ve a apt trabajar en
+     * directo, con la contraseña pedida por sudo en
+     * la propia terminal. La vía anterior (pkexec en
+     * segundo plano, con la salida capturada y
+     * volcada al registro al final) dejaba la
+     * instalación invisible; y en WSL, sin agente
+     * polkit, pkexec moría en silencio: dar "Sí"
+     * parecía no hacer nada.
+     */
+    if (!command_exists("konsole"))
     {
         append_log(
-            "[WARN] Hay una operación en curso: "
-            "espera a que termine."
+            "[ERROR] konsole no está instalado: sin "
+            "la terminal no se puede mostrar la "
+            "instalación."
+        );
+
+        show_error(
+            "Dependencias",
+            "Falta konsole, la terminal donde se "
+            "ve la instalación.\n\n"
+            "Instálala desde una terminal con:\n"
+            "sudo apt install konsole"
         );
 
         return;
     }
 
-    append_section(
-        "INSTALACIÓN DE DEPENDENCIAS"
-    );
+    const std::string script =
+        "echo '=== Dependencias de Samba Control "
+        "Center ==='; "
+        "echo; "
+        "sudo apt-get update && "
+        "sudo apt-get install -y "
+        "samba samba-common-bin smbclient tcpdump "
+        "nmap ufw iproute2 iputils-ping procps "
+        "netcat-openbsd coreutils; "
+        "echo; "
+        "echo '=== Terminado: revisa el resultado "
+        "arriba ==='; "
+        "read -p 'Pulsa ENTER para cerrar la "
+        "consola'";
 
-    append_log(
-        "Instalando en segundo plano: la ventana "
-        "sigue respondiendo..."
-    );
+    try
+    {
+        Glib::spawn_command_line_async(
+            "konsole --noclose -e bash -c " +
+            shell_escape(script)
+        );
 
-    const std::string command =
-        "apt-get update && "
-        "DEBIAN_FRONTEND=noninteractive "
-        "apt-get install -y "
-        "samba "
-        "samba-common-bin "
-        "smbclient "
-        "tcpdump "
-        "nmap "
-        "ufw "
-        "iproute2 "
-        "iputils-ping "
-        "procps "
-        "netcat-openbsd "
-        "coreutils";
+        append_log(
+            "[OK] Consola de instalación abierta: "
+            "la instalación se ve en la ventana de "
+            "konsole."
+        );
 
-    start_async(
-        command,
-        [this](bool ok, const std::string& output) {
-            append_log(output);
+        append_log(
+            "[INFO] Cuando termine, pulsa VERIFICAR "
+            "DEPENDENCIAS para re-comprobar."
+        );
+    }
+    catch (const Glib::Error& error)
+    {
+        append_log(
+            std::string(
+                "[ERROR] No se pudo abrir "
+                "konsole: ") +
+            error.what()
+        );
 
-            if (ok)
-            {
-                append_log(
-                    "[OK] Dependencias instaladas."
-                );
-
-                show_info(
-                    "Dependencias",
-                    "Las dependencias fueron instaladas correctamente."
-                );
-            }
-            else
-            {
-                show_error(
-                    "Dependencias",
-                    "No fue posible instalar las dependencias."
-                );
-            }
-        });
+        show_error(
+            "Dependencias",
+            "No fue posible abrir la consola de "
+            "instalación."
+        );
+    }
 }
 
 
@@ -5120,7 +5145,16 @@ int SambaControlCenterPanel::run_dialog_sync(
         [&loop, &response]
         (int result)
         {
-            response = result;
+            // El diálogo emite DOS respuestas: la del
+            // botón (-8/-9) y, al cerrarse él mismo, un
+            // DELETE_EVENT (-4). Vale la PRIMERA; la
+            // segunda pisaba la respuesta y todo clic
+            // parecía un "no" (cazado el 2026-11-02:
+            // ningún diálogo de la app instalaba ni
+            // confirmaba nada).
+            if (response ==
+                Gtk::ResponseType::NONE)
+                response = result;
 
             if (loop->is_running())
                 loop->quit();
@@ -5162,6 +5196,9 @@ bool SambaControlCenterPanel::ask_install(
         "Se instalarán:\n"
         "Samba, smbclient, tcpdump, UFW,\n"
         "iproute2, ping, netcat y utilidades.\n\n"
+        "La instalación se hará en una ventana de "
+        "konsole que quedará abierta, a la vista, "
+        "junto a la interfaz.\n\n"
         "¿Desea instalarlos ahora?"
     );
 

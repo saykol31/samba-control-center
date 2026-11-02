@@ -58,29 +58,6 @@ static std::string shell_escape(const std::string& value)
 }
 
 
-static std::string execute_command(const std::string& command)
-{
-    std::array<char, 4096> buffer{};
-
-    std::string result;
-
-    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
-
-    if (!pipe)
-        return "ERROR: no fue posible ejecutar el comando.\n";
-
-    while (fgets(buffer.data(),
-                 static_cast<int>(buffer.size()), pipe))
-    {
-        result += buffer.data();
-    }
-
-    pclose(pipe);
-
-    return result;
-}
-
-
 static bool command_exists(const std::string& command)
 {
     const std::string cmd =
@@ -218,7 +195,15 @@ static int run_dialog_sync_local(Gtk::Dialog& dialog)
 
     dialog.signal_response().connect(
         [&loop, &response](int result) {
-            response = result;
+            // El diálogo emite DOS respuestas: la del
+            // botón (-8/-9) y, al cerrarse él mismo, un
+            // DELETE_EVENT (-4). Vale la PRIMERA; la
+            // segunda pisaba la respuesta y todo clic
+            // parecía un "no" (cazado el 2026-11-02:
+            // ningún diálogo de la app instalaba ni
+            // confirmaba nada).
+            if (response == Gtk::ResponseType::NONE)
+                response = result;
 
             if (loop->is_running())
                 loop->quit();
@@ -615,38 +600,72 @@ void SettingsPage::on_install_missing()
 
     dialog.set_secondary_text(
         "Missing packages:\n" + package_list +
-        "\n\nInstall them now? One administrator prompt, "
-        "one apt transaction, packages by name (no pinned "
-        "versions).");
+        "\n\nInstall them now? The installation runs "
+        "in a konsole window that stays open, next to "
+        "the interface. One apt transaction, packages "
+        "by name (no pinned versions).");
 
     if (run_dialog_sync_local(dialog) != Gtk::ResponseType::YES)
         return;
 
-    const std::string command =
-        "apt-get update && "
-        "DEBIAN_FRONTEND=noninteractive apt-get install -y " +
-        package_list;
-
-    // Rebanada 7: apt corre en un hilo; la salida se
-    // vuelca y la tabla se re-chequea al volver.
-    install_busy_ = true;
-    install_output_.clear();
-    btn_install_.set_sensitive(false);
-
+    // El mismo tratamiento que el guarda de
+    // CONTROL — el mecanismo del Update de idec: la
+    // instalación se ve en una konsole que no se
+    // cierra (--noclose), al lado de la interfaz,
+    // con sudo pidiendo la contraseña en la propia
+    // terminal. La vía anterior (pkexec en un hilo,
+    // con la salida capturada y volcada al final)
+    // era invisible; y en WSL pkexec ni siquiera
+    // está instalado, así que moría en silencio.
     auto buffer = deps_view_.get_buffer();
-    buffer->insert(
-        buffer->end(),
-        "\nInstalling in the background — the window "
-        "stays usable...\n");
 
-    install_thread_ = std::thread(
-        [this, command]() {
-            install_output_ = execute_command(
-                "pkexec /bin/sh -c " +
-                shell_escape(command));
+    if (!command_exists("konsole"))
+    {
+        buffer->insert(
+            buffer->end(),
+            "\n[ERROR] konsole is not installed: "
+            "the installation cannot be shown.\n"
+            "Install it from a terminal with:\n"
+            "sudo apt install konsole\n");
 
-            install_signal_.emit();
-        });
+        return;
+    }
+
+    const std::string script =
+        "echo '=== Dependencies — Samba Control "
+        "Center ==='; "
+        "echo; "
+        "sudo apt-get update && "
+        "sudo apt-get install -y " +
+        package_list +
+        "; echo; "
+        "echo '=== Done: check the result "
+        "above ==='; "
+        "read -p 'Press ENTER to close this "
+        "console'";
+
+    try
+    {
+        Glib::spawn_command_line_async(
+            "konsole --noclose -e bash -c " +
+            shell_escape(script));
+
+        buffer->insert(
+            buffer->end(),
+            "\nInstall console opened in konsole: "
+            "the installation runs in that "
+            "window.\nWhen it finishes, press "
+            "CHECK to re-verify.\n");
+    }
+    catch (const Glib::Error& error)
+    {
+        buffer->insert(
+            buffer->end(),
+            std::string(
+                "\n[ERROR] Could not open "
+                "konsole: ") +
+            error.what() + "\n");
+    }
 }
 
 
