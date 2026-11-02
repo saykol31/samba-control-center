@@ -233,6 +233,46 @@ static std::string get_command_output(
 }
 
 
+// Lee el número de paquetes recibidos del resumen de
+// ping ("4 packets transmitted, 4 received, ...").
+// Devuelve -1 si el resumen no aparece.
+//
+// El veredicto anterior buscaba el texto
+// "0% packet loss" — y esa aguja también aparece
+// dentro de "100% packet loss", así que con pérdida
+// total la herramienta decía [OK] igual (visto en
+// campo el 2026-10-28: 0 recibidos y "Windows
+// responde correctamente"). El número no miente.
+static int ping_received_count(const std::string& output)
+{
+    const std::string marker = " received";
+    const std::size_t pos = output.find(marker);
+
+    if (pos == std::string::npos || pos == 0)
+        return -1;
+
+    std::size_t begin = pos;
+
+    while (begin > 0 &&
+           std::isdigit(static_cast<unsigned char>(
+               output[begin - 1])))
+        --begin;
+
+    if (begin == pos)
+        return -1;
+
+    try
+    {
+        return std::stoi(
+            output.substr(begin, pos - begin));
+    }
+    catch (...)
+    {
+        return -1;
+    }
+}
+
+
 static std::string current_user()
 {
     const char* user =
@@ -4228,7 +4268,7 @@ void SambaControlCenterPanel::show_gateway()
 
     append_log(ping);
 
-    if (ping.find("0% packet loss") != std::string::npos)
+    if (ping_received_count(ping) > 0)
     {
         append_log(
             "[OK] El gateway responde."
@@ -4294,7 +4334,7 @@ void SambaControlCenterPanel::show_windows_network()
 
     append_log(ping);
 
-    if (ping.find("0% packet loss") != std::string::npos)
+    if (ping_received_count(ping) > 0)
     {
         append_log(
             "[OK] Windows responde al ping."
@@ -4578,10 +4618,7 @@ void SambaControlCenterPanel::ping_windows()
 
     append_log(output);
 
-    if (
-        output.find("0% packet loss") !=
-        std::string::npos
-    )
+    if (ping_received_count(output) > 0)
     {
         append_log(
             "[OK] Windows responde correctamente."
