@@ -2040,10 +2040,12 @@ void SambaControlCenterPanel::configure_samba()
     if (has_ufw)
     {
         // La misma regla completa del botón FIREWALL:
-        // permisos primero, activación al final.
+        // permisos primero, activación al final; el
+        // perfil OpenSSH cae a 22/tcp donde no existe.
         script += batch_step(
             "ufw",
-            "ufw allow OpenSSH; "
+            "ufw allow OpenSSH 2>/dev/null || "
+            "ufw allow 22/tcp; "
             "ufw allow Samba; "
             "ufw --force enable"
         );
@@ -2399,7 +2401,7 @@ void SambaControlCenterPanel::configure_samba()
         }
 
         append_log(
-            "[OK] UFW activado: OpenSSH y Samba permitidos."
+            "[OK] UFW activado: SSH y Samba permitidos."
         );
 
         set_status(
@@ -3047,15 +3049,19 @@ bool SambaControlCenterPanel::configure_firewall()
 
     /*
      * La regla completa en un solo pkexec, en este orden:
-     * primero los permisos (OpenSSH y Samba) y al final la
+     * primero los permisos (SSH y Samba) y al final la
      * activación. "ufw enable" a secas pregunta (y|n) y sin
      * terminal se aborta: la forma para scripts es
      * "ufw --force enable". Sin el enable, las reglas quedan
      * escritas en un firewall apagado — no hacen nada.
+     * El perfil OpenSSH lo instala openssh-server; donde no
+     * existe, la misma apertura cae a la regla por puerto
+     * (22/tcp) sin ruido de error.
      */
     const bool ran =
         run_admin_command(
-            "ufw allow OpenSSH; "
+            "ufw allow OpenSSH 2>/dev/null || "
+            "ufw allow 22/tcp; "
             "ufw allow Samba; "
             "ufw --force enable",
             output
@@ -3073,7 +3079,7 @@ bool SambaControlCenterPanel::configure_firewall()
         set_status(firewall_status, "ERROR", false);
         return false;
     }
-    append_log("[OK] UFW activado: OpenSSH y Samba permitidos.");
+    append_log("[OK] UFW activado: SSH y Samba permitidos.");
     set_status(firewall_status, "REGLA APLICADA", true);
     return true;
 }
