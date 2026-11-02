@@ -1,7 +1,9 @@
 #include "main_window.hpp"
 #include "home_page.hpp"
+#include "file_page.hpp"
 #include "control_page.hpp"
 #include "user_page.hpp"
+#include "settings_page.hpp"
 
 MainWindow::MainWindow() {
     set_title("Samba Control Center");
@@ -25,9 +27,42 @@ MainWindow::MainWindow() {
     notebook.set_hexpand(true);
     notebook.set_vexpand(true);
 
-    notebook.append_page(*Gtk::make_managed<HomePage>(shared_status), "HOME");
-    notebook.append_page(*Gtk::make_managed<ControlPage>(*this, shared_status), "CONTROL");
+    auto* home_page =
+        Gtk::make_managed<HomePage>(shared_status);
+
+    auto* control_page =
+        Gtk::make_managed<ControlPage>(*this, shared_status);
+
+    // El RESET de HOME acciona el reinicio del panel de
+    // CONTROL: una sola implementación para los dos sitios.
+    home_page->signal_reset_requested.connect(
+        sigc::hide_return(
+            sigc::mem_fun(
+                *control_page,
+                &ControlPage::restart_services
+            )
+        )
+    );
+
+    auto* settings_page =
+        Gtk::make_managed<SettingsPage>();
+
+    // El PICK de SETTINGS acciona el selector CONFIG WIN
+    // del panel de CONTROL: una sola implementación de
+    // escaneo y guardado. Al volver, SETTINGS relee el
+    // windows_ip que el selector haya guardado.
+    settings_page->signal_pick_requested.connect(
+        [control_page, settings_page]() {
+            control_page->pick_windows_ip();
+            settings_page->reload_windows_ip();
+        }
+    );
+
+    notebook.append_page(*home_page, "HOME");
+    notebook.append_page(*Gtk::make_managed<FilePage>(), "FILE");
+    notebook.append_page(*control_page, "CONTROL");
     notebook.append_page(*Gtk::make_managed<UserPage>(), "USER");
+    notebook.append_page(*settings_page, "SETTINGS");
 
     root_box.append(notebook);
 }

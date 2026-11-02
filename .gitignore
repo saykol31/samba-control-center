@@ -21,3 +21,5 @@ Makefile
 
 # Copia temporal antigua
 /src/main.cpp.back after nmap
+*.bak-*
+*.bak-*

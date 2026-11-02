@@ -652,12 +652,6 @@ void SambaControlCenterPanel::setup_ui()
     );
 
     configure_button(
-        btn_restart,
-        "REINICIAR SERVICIOS",
-        "Reiniciar smbd y nmbd"
-    );
-
-    configure_button(
         btn_firewall,
         "FIREWALL UFW",
         "Configurar firewall para Samba"
@@ -759,7 +753,6 @@ void SambaControlCenterPanel::setup_ui()
    button_grid->attach(btn_install,    0, 0);
    button_grid->attach(btn_configure,  1, 0);
    button_grid->attach(btn_password,   2, 0);
-   button_grid->attach(btn_restart,    3, 0);
 
    button_grid->attach(btn_scan_red,   0, 1);
    button_grid->attach(btn_config_win, 1, 1);
@@ -809,9 +802,9 @@ void SambaControlCenterPanel::setup_ui()
       );
    }
 
-   // Los 20 botones, incluido LIMPIAR.
+   // Los 19 botones, incluido LIMPIAR.
    for (auto* button : {
-         &btn_install, &btn_configure, &btn_password, &btn_restart,
+         &btn_install, &btn_configure, &btn_password,
          &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
          &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
          &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -823,7 +816,7 @@ void SambaControlCenterPanel::setup_ui()
    // Al hacer clic, solo cambia qué botón queda marcado.
    // Las conexiones originales de las acciones se conservan.
    for (auto* button : {
-         &btn_install, &btn_configure, &btn_password, &btn_restart,
+         &btn_install, &btn_configure, &btn_password,
          &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
          &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
          &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -831,7 +824,7 @@ void SambaControlCenterPanel::setup_ui()
    }) {
       button->signal_clicked().connect([this, button]() {
          for (auto* candidate : {
-               &btn_install, &btn_configure, &btn_password, &btn_restart,
+               &btn_install, &btn_configure, &btn_password,
                &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
                &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
                &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -851,6 +844,51 @@ void SambaControlCenterPanel::setup_ui()
 
     log_buffer =
         Gtk::TextBuffer::create();
+
+    /*
+     * Colores de los marcadores del log (misma paleta
+     * que las lámparas de estado):
+     * [OK] verde, [ERROR] rojo, [FALTA] naranja.
+     */
+
+    auto tag_ok =
+        log_buffer->create_tag(
+            "log_ok"
+        );
+
+    tag_ok->property_foreground().set_value(
+        "green"
+    );
+
+    tag_ok->property_weight().set_value(
+        700
+    );
+
+    auto tag_error =
+        log_buffer->create_tag(
+            "log_error"
+        );
+
+    tag_error->property_foreground().set_value(
+        "red"
+    );
+
+    tag_error->property_weight().set_value(
+        700
+    );
+
+    auto tag_falta =
+        log_buffer->create_tag(
+            "log_falta"
+        );
+
+    tag_falta->property_foreground().set_value(
+        "orange"
+    );
+
+    tag_falta->property_weight().set_value(
+        700
+    );
 
     log_view.set_buffer(
         log_buffer
@@ -915,15 +953,6 @@ void SambaControlCenterPanel::setup_ui()
         sigc::mem_fun(
             *this,
             &SambaControlCenterPanel::show_password_dialog
-        )
-    );
-
-    btn_restart.signal_clicked().connect(
-        sigc::hide_return(
-            sigc::mem_fun(
-                *this,
-                &SambaControlCenterPanel::restart_services
-            )
         )
     );
 
@@ -1223,9 +1252,69 @@ void SambaControlCenterPanel::append_log(
     if (!log_buffer)
         return;
 
+    /*
+     * Se colorea solo el marcador inicial de la línea
+     * ([OK], [ERROR], [FALTA]); el resto del texto
+     * queda como está.
+     */
+
+    std::string tag_name;
+
+    std::string::size_type marker_size = 0;
+
+    if (text.rfind("[OK]", 0) == 0)
+    {
+        tag_name =
+            "log_ok";
+
+        marker_size = 4;
+    }
+    else if (text.rfind("[ERROR]", 0) == 0)
+    {
+        tag_name =
+            "log_error";
+
+        marker_size = 7;
+    }
+    else if (text.rfind("[FALTA]", 0) == 0)
+    {
+        tag_name =
+            "log_falta";
+
+        marker_size = 7;
+    }
+
+    auto start_mark =
+        log_buffer->create_mark(
+            log_buffer->end()
+        );
+
     log_buffer->insert(
         log_buffer->end(),
         text + "\n"
+    );
+
+    if (!tag_name.empty())
+    {
+        auto marker_begin =
+            start_mark->get_iter();
+
+        auto marker_end =
+            marker_begin;
+
+        marker_end.forward_chars(
+            static_cast<int>(marker_size)
+        );
+
+        log_buffer->apply_tag_by_name(
+            tag_name,
+            marker_begin,
+            marker_end
+        );
+    }
+
+    log_buffer->delete_mark(
+        start_mark
     );
 
     auto end_iter = log_buffer->end();
@@ -1394,6 +1483,12 @@ void SambaControlCenterPanel::check_dependencies()
             "tcpdump"
         );
 
+    const bool nmap =
+        check_package(
+            "nmap",
+            "nmap"
+        );
+
     const bool ufw =
         check_package(
             "ufw",
@@ -1481,6 +1576,13 @@ void SambaControlCenterPanel::check_dependencies()
         )
     );
 
+    append_log(
+        "nmap: " +
+        std::string(
+            nmap ? "OK" : "FALTA"
+        )
+    );
+
     /*
      * Una sola instalación.
      */
@@ -1493,7 +1595,8 @@ void SambaControlCenterPanel::check_dependencies()
         !ufw ||
         !ss ||
         !ping ||
-        !nc)
+        !nc ||
+        !nmap)
     {
         if (ask_install(
                 "componentes Samba / red"))
@@ -1540,6 +1643,7 @@ void SambaControlCenterPanel::install_dependencies()
         "samba-common-bin "
         "smbclient "
         "tcpdump "
+        "nmap "
         "ufw "
         "iproute2 "
         "iputils-ping "
@@ -1935,9 +2039,13 @@ void SambaControlCenterPanel::configure_samba()
 
     if (has_ufw)
     {
+        // La misma regla completa del botón FIREWALL:
+        // permisos primero, activación al final.
         script += batch_step(
             "ufw",
-            "ufw allow samba"
+            "ufw allow OpenSSH; "
+            "ufw allow Samba; "
+            "ufw --force enable"
         );
     }
 
@@ -2291,7 +2399,7 @@ void SambaControlCenterPanel::configure_samba()
         }
 
         append_log(
-            "[OK] Perfil Samba permitido en UFW."
+            "[OK] UFW activado: OpenSSH y Samba permitidos."
         );
 
         set_status(
@@ -2691,6 +2799,15 @@ void SambaControlCenterPanel::set_samba_password(
  */
 
 
+void SambaControlCenterPanel::pick_windows_ip()
+{
+    // El selector es el de CONFIG WIN de este panel:
+    // escanea, el usuario elige y el destino se guarda
+    // en la configuración. SETTINGS solo pide abrirlo.
+    configure_windows();
+}
+
+
 bool SambaControlCenterPanel::restart_services()
 {
     append_section(
@@ -2928,13 +3045,27 @@ bool SambaControlCenterPanel::configure_firewall()
 
     std::string output;
 
-    const bool ok =
+    /*
+     * La regla completa en un solo pkexec, en este orden:
+     * primero los permisos (OpenSSH y Samba) y al final la
+     * activación. "ufw enable" a secas pregunta (y|n) y sin
+     * terminal se aborta: la forma para scripts es
+     * "ufw --force enable". Sin el enable, las reglas quedan
+     * escritas en un firewall apagado — no hacen nada.
+     */
+    const bool ran =
         run_admin_command(
-            "ufw allow samba",
+            "ufw allow OpenSSH; "
+            "ufw allow Samba; "
+            "ufw --force enable",
             output
         );
 
     append_log(output);
+
+    const bool ok =
+        ran &&
+        output.find("ERROR") == std::string::npos;
 
     if (!ok)
     {
@@ -2942,7 +3073,7 @@ bool SambaControlCenterPanel::configure_firewall()
         set_status(firewall_status, "ERROR", false);
         return false;
     }
-    append_log("[OK] Perfil Samba permitido en UFW.");
+    append_log("[OK] UFW activado: OpenSSH y Samba permitidos.");
     set_status(firewall_status, "REGLA APLICADA", true);
     return true;
 }

@@ -17,6 +17,7 @@ add_executable(samba-control-center
     src/main.cpp
     src/main_window.cpp
     src/home_page.cpp
+    src/file_page.cpp
     src/control_page.cpp
     src/legacy_control.cpp
     src/user_page.cpp

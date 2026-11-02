@@ -10,6 +10,17 @@ public:
 
     explicit SambaControlCenterPanel(Gtk::Window& parent, SharedStatus& shared_status);
 
+    // Reinicio de smbd y nmbd: única implementación,
+    // vive en este panel. El botón RESET de HOME la
+    // invoca a través de ControlPage y MainWindow.
+    bool restart_services();
+
+    // Selector de equipo Windows (CONFIG WIN): única
+    // implementación, vive en este panel. El botón
+    // PICK de SETTINGS lo invoca a través de
+    // ControlPage y MainWindow.
+    void pick_windows_ip();
+
 private:
     Gtk::Window* parent_window = nullptr;
    SharedStatus& shared_status_;
@@ -48,7 +59,6 @@ private:
     Gtk::Button btn_install;
     Gtk::Button btn_configure;
     Gtk::Button btn_password;
-    Gtk::Button btn_restart;
     Gtk::Button btn_firewall;
     Gtk::Button btn_ports;
     Gtk::Button btn_network;
@@ -189,8 +199,6 @@ private:
      * ------------------------------------------------------------
      */
 
-
-    bool restart_services();
 
     void check_services();
 

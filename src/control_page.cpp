@@ -7,8 +7,26 @@ ControlPage::ControlPage(Gtk::Window& parent, SharedStatus& shared_status)
     set_hexpand(true);
     set_vexpand(true);
 
-    auto* controller = Gtk::make_managed<SambaControlCenterPanel>(parent, shared_status);
-    controller->set_hexpand(true);
-    controller->set_vexpand(true);
-    append(*controller);
+    controller_ = Gtk::make_managed<SambaControlCenterPanel>(parent, shared_status);
+    controller_->set_hexpand(true);
+    controller_->set_vexpand(true);
+    append(*controller_);
+}
+
+
+bool ControlPage::restart_services()
+{
+    if (controller_ == nullptr)
+        return false;
+
+    return controller_->restart_services();
+}
+
+
+void ControlPage::pick_windows_ip()
+{
+    if (controller_ == nullptr)
+        return;
+
+    controller_->pick_windows_ip();
 }
