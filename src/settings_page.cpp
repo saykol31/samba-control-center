@@ -272,6 +272,10 @@ SettingsPage::dependency_table()
 SettingsPage::SettingsPage()
     : Gtk::Box(Gtk::Orientation::VERTICAL, 0)
 {
+    install_signal_.connect(
+        sigc::mem_fun(
+            *this, &SettingsPage::on_install_finished));
+
     set_hexpand(true);
     set_vexpand(true);
 
@@ -563,6 +567,9 @@ void SettingsPage::refresh_dependencies()
 
 void SettingsPage::on_install_missing()
 {
+    if (install_busy_)
+        return;
+
     const auto missing = missing_dependencies();
 
     if (missing.empty())
@@ -620,13 +627,48 @@ void SettingsPage::on_install_missing()
         "DEBIAN_FRONTEND=noninteractive apt-get install -y " +
         package_list;
 
-    const std::string output = execute_command(
-        "pkexec /bin/sh -c " + shell_escape(command));
+    // Rebanada 7: apt corre en un hilo; la salida se
+    // vuelca y la tabla se re-chequea al volver.
+    install_busy_ = true;
+    install_output_.clear();
+    btn_install_.set_sensitive(false);
 
     auto buffer = deps_view_.get_buffer();
     buffer->insert(
         buffer->end(),
-        "\n--- apt output ---\n" + output);
+        "\nInstalling in the background — the window "
+        "stays usable...\n");
+
+    install_thread_ = std::thread(
+        [this, command]() {
+            install_output_ = execute_command(
+                "pkexec /bin/sh -c " +
+                shell_escape(command));
+
+            install_signal_.emit();
+        });
+}
+
+
+void SettingsPage::on_install_finished()
+{
+    if (install_thread_.joinable())
+        install_thread_.join();
+
+    install_busy_ = false;
+    btn_install_.set_sensitive(true);
+
+    auto buffer = deps_view_.get_buffer();
+    buffer->insert(
+        buffer->end(),
+        "\n--- apt output ---\n" + install_output_);
 
     refresh_dependencies();
+}
+
+
+SettingsPage::~SettingsPage()
+{
+    if (install_thread_.joinable())
+        install_thread_.join();
 }

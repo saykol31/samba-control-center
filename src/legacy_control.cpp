@@ -542,6 +542,13 @@ SambaControlCenterPanel::SambaControlCenterPanel(
 
     windows_ip = load_windows_ip_config();
 
+    async_signal_.connect(
+        sigc::mem_fun(
+            *this,
+            &SambaControlCenterPanel::on_async_finished
+        )
+    );
+
     setup_ui();
 
     append_log(
@@ -623,6 +630,8 @@ void SambaControlCenterPanel::setup_ui()
 
     auto* button_grid =
         Gtk::make_managed<Gtk::Grid>();
+
+    button_grid_ = button_grid;
 
     button_grid->set_row_spacing(6);
     button_grid->set_column_spacing(6);
@@ -1414,6 +1423,65 @@ bool SambaControlCenterPanel::run_admin_command(
 }
 
 
+SambaControlCenterPanel::~SambaControlCenterPanel()
+{
+    // Si la ventana se cierra con una operación en
+    // curso, se espera a que el hilo termine: las
+    // operaciones son finitas y la alternativa
+    // (destruir el panel bajo el hilo) es un cuelgue.
+    if (async_thread_.joinable())
+        async_thread_.join();
+}
+
+
+/*
+ * Rebanada 7: lanza el comando con privilegios en un
+ * hilo y avisa por el Dispatcher. El llamante ya
+ * escribió su cabecera en el registro; el remate
+ * (done) corre en el hilo GTK con el resultado.
+ */
+void SambaControlCenterPanel::start_async(
+    const std::string& admin_command,
+    std::function<void(bool, const std::string&)> done)
+{
+    async_done_ = std::move(done);
+
+    if (button_grid_)
+        button_grid_->set_sensitive(false);
+
+    async_busy_ = true;
+
+    async_thread_ = std::thread(
+        [this, admin_command]() {
+            async_ok_ =
+                run_admin_command(
+                    admin_command,
+                    async_output_
+                );
+
+            async_signal_.emit();
+        });
+}
+
+
+void SambaControlCenterPanel::on_async_finished()
+{
+    if (async_thread_.joinable())
+        async_thread_.join();
+
+    async_busy_ = false;
+
+    if (button_grid_)
+        button_grid_->set_sensitive(true);
+
+    auto done = async_done_;
+    async_done_ = nullptr;
+
+    if (done)
+        done(async_ok_, async_output_);
+}
+
+
 /*
  * ================================================================
  * DEPENDENCIAS
@@ -1629,11 +1697,24 @@ void SambaControlCenterPanel::check_dependencies()
 
 void SambaControlCenterPanel::install_dependencies()
 {
+    if (async_busy_)
+    {
+        append_log(
+            "[WARN] Hay una operación en curso: "
+            "espera a que termine."
+        );
+
+        return;
+    }
+
     append_section(
         "INSTALACIÓN DE DEPENDENCIAS"
     );
 
-    std::string output;
+    append_log(
+        "Instalando en segundo plano: la ventana "
+        "sigue respondiendo..."
+    );
 
     const std::string command =
         "apt-get update && "
@@ -1651,32 +1732,30 @@ void SambaControlCenterPanel::install_dependencies()
         "netcat-openbsd "
         "coreutils";
 
-    const bool ok =
-        run_admin_command(
-            command,
-            output
-        );
+    start_async(
+        command,
+        [this](bool ok, const std::string& output) {
+            append_log(output);
 
-    append_log(output);
+            if (ok)
+            {
+                append_log(
+                    "[OK] Dependencias instaladas."
+                );
 
-    if (ok)
-    {
-        append_log(
-            "[OK] Dependencias instaladas."
-        );
-
-        show_info(
-            "Dependencias",
-            "Las dependencias fueron instaladas correctamente."
-        );
-    }
-    else
-    {
-        show_error(
-            "Dependencias",
-            "No fue posible instalar las dependencias."
-        );
-    }
+                show_info(
+                    "Dependencias",
+                    "Las dependencias fueron instaladas correctamente."
+                );
+            }
+            else
+            {
+                show_error(
+                    "Dependencias",
+                    "No fue posible instalar las dependencias."
+                );
+            }
+        });
 }
 
 
@@ -2157,6 +2236,16 @@ void SambaControlCenterPanel::configure_samba()
         "CONFIGURAR SAMBA"
     );
 
+    if (async_busy_)
+    {
+        append_log(
+            "[WARN] Hay una operación en curso: "
+            "espera a que termine."
+        );
+
+        return;
+    }
+
     if (!command_exists("testparm"))
     {
         append_log(
@@ -2315,13 +2404,39 @@ void SambaControlCenterPanel::configure_samba()
         );
     }
 
-    std::string output;
-
-    run_admin_command(
-        script,
-        output
+    append_log(
+        "Aplicando en segundo plano: la ventana "
+        "sigue respondiendo..."
     );
 
+    // Rebanada 7: el lote corre en el hilo; todo el
+    // remate (segmentos, estados, diálogos) vive en
+    // finish_configure_samba, ya en el hilo GTK.
+    start_async(
+        script,
+        [this, temp, has_pdbedit, has_nmbd, has_ufw](
+            bool,
+            const std::string& output)
+        {
+            finish_configure_samba(
+                output,
+                temp,
+                has_pdbedit,
+                has_nmbd,
+                has_ufw);
+        });
+
+    return;
+}
+
+
+void SambaControlCenterPanel::finish_configure_samba(
+    const std::string& output,
+    const std::string& temp,
+    bool has_pdbedit,
+    bool has_nmbd,
+    bool has_ufw)
+{
     std::size_t cursor = 0;
 
     int rc = -1;
@@ -3302,6 +3417,16 @@ void SambaControlCenterPanel::check_services()
 
 bool SambaControlCenterPanel::configure_firewall()
 {
+    if (async_busy_)
+    {
+        append_log(
+            "[WARN] Hay una operación en curso: "
+            "espera a que termine."
+        );
+
+        return true;
+    }
+
     append_section(
         "FIREWALL UFW"
     );
@@ -3315,8 +3440,6 @@ bool SambaControlCenterPanel::configure_firewall()
         return true;
     }
 
-    std::string output;
-
     /*
      * La regla completa en un solo pkexec, en este orden:
      * primero los permisos (SSH y Samba) y al final la
@@ -3327,30 +3450,39 @@ bool SambaControlCenterPanel::configure_firewall()
      * El perfil OpenSSH lo instala openssh-server; donde no
      * existe, la misma apertura cae a la regla por puerto
      * (22/tcp) sin ruido de error.
+     *
+     * Rebanada 7: la regla corre en un hilo; el veredicto
+     * se aplica al volver, en el hilo GTK. El bool de
+     * retorno queda como "sin objeción inmediata": el
+     * único llamante es el botón, que no lo consume.
      */
-    const bool ran =
-        run_admin_command(
-            "ufw allow OpenSSH 2>/dev/null || "
-            "ufw allow 22/tcp; "
-            "ufw allow Samba; "
-            "ufw --force enable",
-            output
-        );
+    start_async(
+        "ufw allow OpenSSH 2>/dev/null || "
+        "ufw allow 22/tcp; "
+        "ufw allow Samba; "
+        "ufw --force enable",
+        [this](bool ran, const std::string& output) {
+            append_log(output);
 
-    append_log(output);
+            const bool ok =
+                ran &&
+                output.find("ERROR") == std::string::npos;
 
-    const bool ok =
-        ran &&
-        output.find("ERROR") == std::string::npos;
+            if (!ok)
+            {
+                append_log(
+                    "[ERROR] No se pudo aplicar la regla de UFW."
+                );
+                set_status(firewall_status, "ERROR", false);
+                return;
+            }
 
-    if (!ok)
-    {
-        append_log("[ERROR] No se pudo aplicar la regla de UFW.");
-        set_status(firewall_status, "ERROR", false);
-        return false;
-    }
-    append_log("[OK] UFW activado: SSH y Samba permitidos.");
-    set_status(firewall_status, "REGLA APLICADA", true);
+            append_log(
+                "[OK] UFW activado: SSH y Samba permitidos."
+            );
+            set_status(firewall_status, "REGLA APLICADA", true);
+        });
+
     return true;
 }
 
@@ -3553,6 +3685,16 @@ void SambaControlCenterPanel::scan_network()
 {
     append_section("ESCANEAR RED");
 
+    if (async_busy_)
+    {
+        append_log(
+            "[WARN] Hay una operación en curso: "
+            "espera a que termine."
+        );
+
+        return;
+    }
+
     if (!command_exists("nmap"))
     {
         append_log("[ERROR] Nmap no está instalado.");
@@ -3685,10 +3827,27 @@ void SambaControlCenterPanel::scan_network()
         script += "nmap -sn " + shell_escape(subnet) + "\n";
     }
 
-    std::string output;
-    const bool ok = run_admin_command(script, output);
+    append_log(
+        "Escaneando en segundo plano: la ventana "
+        "sigue respondiendo..."
+    );
+
+    // Rebanada 7: Nmap corre en el hilo; el análisis
+    // y la tabla viven en finish_scan_network.
+    start_async(
+        script,
+        [this](bool ok, const std::string& output) {
+            finish_scan_network(ok, output);
+        });
+
+    return;
+}
 
 
+void SambaControlCenterPanel::finish_scan_network(
+    bool ok,
+    const std::string& output)
+{
     struct NetworkHost
     {
         std::string ip;
@@ -4562,6 +4721,16 @@ void SambaControlCenterPanel::run_tcpdump_diagnostic()
         "TCPDUMP - DIAGNÓSTICO SMB"
     );
 
+    if (async_busy_)
+    {
+        append_log(
+            "[WARN] Hay una operación en curso: "
+            "espera a que termine."
+        );
+
+        return;
+    }
+
     if (windows_ip.empty())
     {
         append_log(
@@ -4592,32 +4761,38 @@ void SambaControlCenterPanel::run_tcpdump_diagnostic()
         "Duración: 15 segundos."
     );
 
-    std::string output;
+    append_log(
+        "Capturando en segundo plano: la ventana "
+        "sigue respondiendo..."
+    );
 
-    const bool ok =
-        run_admin_command(
-            "timeout 15 "
-            "tcpdump -ni any " +
-            shell_escape(
-                "host " + windows_ip + " and tcp port 445"
-            ),
-            output
+    // Rebanada 7: los 15 segundos de captura corren
+    // en el hilo, no contra la ventana.
+    const std::string command =
+        "timeout 15 "
+        "tcpdump -ni any " +
+        shell_escape(
+            "host " + windows_ip + " and tcp port 445"
         );
 
-    append_log(output);
+    start_async(
+        command,
+        [this](bool ok, const std::string& output) {
+            append_log(output);
 
-    if (ok)
-    {
-        append_log(
-            "[OK] Captura terminada."
-        );
-    }
-    else
-    {
-        append_log(
-            "[INFO] tcpdump terminó con código no cero."
-        );
-    }
+            if (ok)
+            {
+                append_log(
+                    "[OK] Captura terminada."
+                );
+            }
+            else
+            {
+                append_log(
+                    "[INFO] tcpdump terminó con código no cero."
+                );
+            }
+        });
 }
 
 

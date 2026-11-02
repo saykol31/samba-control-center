@@ -3,12 +3,16 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <functional>
+#include <thread>
 #include "shared_status.hpp"
 class SambaControlCenterPanel : public Gtk::Box
 {
 public:
 
     explicit SambaControlCenterPanel(Gtk::Window& parent, SharedStatus& shared_status);
+
+    ~SambaControlCenterPanel();
 
     // Reinicio de smbd y nmbd: única implementación,
     // vive en este panel. El botón RESET de HOME la
@@ -169,6 +173,20 @@ private:
 
     void configure_samba();
 
+    // Remate de configure_samba en el hilo GTK, cuando el
+    // lote vuelve del hilo de trabajo (rebanada 7).
+    void finish_configure_samba(
+        const std::string& output,
+        const std::string& temp,
+        bool has_pdbedit,
+        bool has_nmbd,
+        bool has_ufw);
+
+    // Remate del escaneo de red en el hilo GTK.
+    void finish_scan_network(
+        bool ok,
+        const std::string& output);
+
     std::string prepare_samba_config_file();
 
     bool validate_samba_config();
@@ -295,6 +313,34 @@ private:
         const std::string& command,
         std::string& output
     );
+
+    /*
+     * ------------------------------------------------------------
+     * ASÍNCRONO (rebanada 7)
+     * ------------------------------------------------------------
+     * Una sola operación larga a la vez: el comando con
+     * privilegios corre en un hilo (la ventana sigue viva)
+     * y el Dispatcher avisa al hilo GTK, que recoge el
+     * resultado y ejecuta el remate. Mientras dura, la
+     * botonera queda insensible.
+     */
+
+    Gtk::Grid* button_grid_ = nullptr;
+
+    Glib::Dispatcher async_signal_;
+    std::thread async_thread_;
+    bool async_busy_ = false;
+    bool async_ok_ = false;
+    std::string async_output_;
+    std::function<void(bool, const std::string&)>
+        async_done_;
+
+    void start_async(
+        const std::string& admin_command,
+        std::function<void(bool, const std::string&)> done
+    );
+
+    void on_async_finished();
 
     /*
      * ------------------------------------------------------------

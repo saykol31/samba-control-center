@@ -2,6 +2,7 @@
 
 #include <gtkmm.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 /*
@@ -33,6 +34,7 @@
 class SettingsPage : public Gtk::Box {
 public:
     SettingsPage();
+    ~SettingsPage();
 
     // El botón PICK no busca por su cuenta: emite esta señal
     // y MainWindow la conecta con el selector CONFIG WIN del
@@ -69,5 +71,14 @@ private:
     void on_save_values();
     void refresh_dependencies();
     void on_install_missing();
+
+    // Instalación asíncrona (rebanada 7): apt corre en
+    // un hilo y el Dispatcher avisa para volcar la
+    // salida y re-chequear la tabla.
+    Glib::Dispatcher install_signal_;
+    std::thread install_thread_;
+    bool install_busy_ = false;
+    std::string install_output_;
+    void on_install_finished();
     std::vector<const Dependency*> missing_dependencies() const;
 };

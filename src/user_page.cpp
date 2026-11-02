@@ -288,6 +288,9 @@ static Gtk::Label* make_column_title(const char* markup)
 UserPage::UserPage()
     : Gtk::Box(Gtk::Orientation::VERTICAL, 10)
 {
+    scan_signal_.connect(
+        sigc::mem_fun(*this, &UserPage::on_scan_finished));
+
     set_margin_start(16);
     set_margin_end(16);
     set_margin_top(16);
@@ -370,10 +373,10 @@ UserPage::UserPage()
     server_entry_.set_placeholder_text("IP or name");
     server_entry_.set_hexpand(true);
     server_row->append(server_entry_);
-    auto* btn_scan = Gtk::make_managed<Gtk::Button>("SCAN");
-    btn_scan->signal_clicked().connect(
+    scan_button_ = Gtk::make_managed<Gtk::Button>("SCAN");
+    scan_button_->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_scan));
-    server_row->append(*btn_scan);
+    server_row->append(*scan_button_);
     client_box->append(*server_row);
 
     client_box->append(*make_list_scroller(hosts_list_, 70));
@@ -874,6 +877,14 @@ void UserPage::on_delete_user()
 
 void UserPage::on_scan()
 {
+    if (scan_busy_)
+    {
+        log_line(
+            "[CLIENT] A scan is already running — "
+            "please wait.");
+        return;
+    }
+
     if (!command_exists("nmap"))
     {
         log_line(
@@ -964,39 +975,89 @@ void UserPage::on_scan()
     while (auto* row = hosts_list_.get_row_at_index(0))
         hosts_list_.remove(*row);
 
-    int found = 0;
-
-    for (const auto& subnet : subnets)
+    // Rebanada 7: nmap corre en un hilo (un escaneo
+    // puede tardar minutos) y la lista se rellena al
+    // volver, en on_scan_finished.
+    if (subnets.empty())
     {
-        const std::string output = execute_command(
-            "nmap -sn " + shell_escape(subnet));
+        log_line(
+            "[CLIENT] No local IPv4 networks found "
+            "to scan.");
+        return;
+    }
 
-        std::istringstream scan_lines(output);
+    scan_busy_ = true;
+    scan_results_.clear();
 
-        while (std::getline(scan_lines, line))
-        {
-            const std::string prefix = "Nmap scan report for ";
+    if (scan_button_)
+        scan_button_->set_sensitive(false);
 
-            if (line.rfind(prefix, 0) != 0)
-                continue;
+    log_line(
+        "[CLIENT] Scanning in the background — the "
+        "window stays usable...");
 
-            const std::string host = trim(
-                line.substr(prefix.size()));
+    scan_thread_ = std::thread(
+        [this, subnets]() {
+            for (const auto& subnet : subnets)
+            {
+                const std::string output =
+                    execute_command(
+                        "nmap -sn " +
+                        shell_escape(subnet));
 
-            if (host.empty())
-                continue;
+                std::istringstream scan_lines(output);
+                std::string scan_line;
 
-            auto* label = Gtk::make_managed<Gtk::Label>(host);
-            label->set_halign(Gtk::Align::START);
-            hosts_list_.append(*label);
-            ++found;
-        }
+                while (std::getline(scan_lines, scan_line))
+                {
+                    const std::string prefix =
+                        "Nmap scan report for ";
+
+                    if (scan_line.rfind(prefix, 0) != 0)
+                        continue;
+
+                    const std::string host = trim(
+                        scan_line.substr(prefix.size()));
+
+                    if (!host.empty())
+                        scan_results_.push_back(host);
+                }
+            }
+
+            scan_signal_.emit();
+        });
+}
+
+
+void UserPage::on_scan_finished()
+{
+    if (scan_thread_.joinable())
+        scan_thread_.join();
+
+    scan_busy_ = false;
+
+    if (scan_button_)
+        scan_button_->set_sensitive(true);
+
+    for (const auto& host : scan_results_)
+    {
+        auto* label = Gtk::make_managed<Gtk::Label>(host);
+        label->set_halign(Gtk::Align::START);
+        hosts_list_.append(*label);
     }
 
     log_line(
         "[CLIENT] Scan finished: " +
-        std::to_string(found) + " hosts found. Pick one "
+        std::to_string(scan_results_.size()) +
+        " hosts found. Pick one "
         "to fill the Server field.");
+}
+
+
+UserPage::~UserPage()
+{
+    if (scan_thread_.joinable())
+        scan_thread_.join();
 }
 
 

@@ -3,6 +3,7 @@
 #include <gtkmm.h>
 #include <array>
 #include <string>
+#include <thread>
 #include <vector>
 
 /*
@@ -29,6 +30,7 @@
 class UserPage : public Gtk::Box {
 public:
     UserPage();
+    ~UserPage();
 
 private:
     // ---------- SERVER ----------
@@ -61,6 +63,16 @@ private:
     std::string selected_share() const;
     std::string share_uri() const;
     void on_scan();
+
+    // Escaneo asíncrono (rebanada 7): nmap corre en un
+    // hilo y el Dispatcher devuelve los equipos al hilo
+    // GTK, que rellena la lista.
+    Gtk::Button* scan_button_ = nullptr;
+    Glib::Dispatcher scan_signal_;
+    std::thread scan_thread_;
+    bool scan_busy_ = false;
+    std::vector<std::string> scan_results_;
+    void on_scan_finished();
     void on_list_shares();
     void on_connect();
     void on_open_share();
