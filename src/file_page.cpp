@@ -301,7 +301,10 @@ FilePage::FilePage()
     btn_remove_.signal_clicked().connect(
         sigc::mem_fun(*this, &FilePage::on_remove));
     btn_refresh_.signal_clicked().connect(
-        [this]() { refresh_all_rows(); });
+        [this]() {
+            refresh_all_rows();
+            signal_refresh_requested.emit();
+        });
 
     name_entry_.signal_changed().connect(
         sigc::mem_fun(*this, &FilePage::on_name_changed));
@@ -563,17 +566,40 @@ void FilePage::touch_row(const Glib::RefPtr<ShareRow>& row)
 
 void FilePage::refresh_all_rows()
 {
-    const guint count = store_->get_n_items();
+    /*
+     * REFRESH de verdad: relee el config y reconstruye
+     * las filas con objetos nuevos. La versión anterior
+     * reinsertaba LOS MISMOS objetos con splice() y la
+     * vista reutilizaba los widgets de cada posición
+     * (el ítem no cambiaba): el bind —que es quien
+     * comprueba si la carpeta existe— nunca volvía a
+     * correr, y el estado solo se corregía cerrando y
+     * reabriendo la app. Visto en campo y reproducido
+     * en laboratorio el 2026-11-02.
+     */
+    std::string selected_folder;
 
-    if (count == 0)
-        return;
+    if (auto row = selected_row())
+        selected_folder = row->folder;
 
-    std::vector<Glib::RefPtr<ShareRow>> all;
+    store_->remove_all();
+    load_shares();
 
-    for (guint i = 0; i < count; ++i)
-        all.push_back(store_->get_item(i));
+    if (!selected_folder.empty())
+    {
+        for (guint i = 0; i < store_->get_n_items(); ++i)
+        {
+            auto item = store_->get_item(i);
 
-    store_->splice(0, count, all);
+            if (item && item->folder == selected_folder)
+            {
+                selection_->set_selected(i);
+                break;
+            }
+        }
+    }
+
+    sync_editors();
 }
 
 

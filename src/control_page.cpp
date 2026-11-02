@@ -23,6 +23,15 @@ bool ControlPage::restart_services()
 }
 
 
+void ControlPage::refresh_folder_status()
+{
+    if (controller_ == nullptr)
+        return;
+
+    controller_->folder_exists();
+}
+
+
 void ControlPage::pick_windows_ip()
 {
     if (controller_ == nullptr)

@@ -31,6 +31,12 @@ class FilePage : public Gtk::Box {
 public:
     FilePage();
 
+    // El botón REFRESH de FILE avisa: MainWindow lo
+    // conecta al veredicto de carpeta del panel de
+    // CONTROL (el chip que muestra HOME), para que
+    // las dos vistas de la carpeta digan lo mismo.
+    sigc::signal<void()> signal_refresh_requested;
+
     struct ShareDef {
         std::string folder;
         std::string name;

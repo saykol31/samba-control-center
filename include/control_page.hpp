@@ -17,6 +17,13 @@ public:
     // PICK de SETTINGS.
     void pick_windows_ip();
 
+    // Puente al veredicto de carpeta del panel
+    // heredado (folder_exists): lo acciona el botón
+    // REFRESH de FILE, para que el chip que muestra
+    // HOME se entere de los cambios de carpeta sin
+    // esperar a un reinicio de la app.
+    void refresh_folder_status();
+
 private:
     SambaControlCenterPanel* controller_ = nullptr;
 };

@@ -136,7 +136,8 @@ SharedStatus::SharedStatus()
     system_card->append(*system_title);
 
     add_row(*network_card, "Samba", samba_status_, 0);
-    add_row(*network_card, "Carpeta Red", folder_status_, 1);
+    folder_title_.set_text("Carpeta Red");
+    add_row(*network_card, folder_title_, folder_status_, 1);
     add_row(*network_card, "Puertos 139/445", ports_status_, 2);
     add_row(*network_card, "Red / interfaces", network_status_, 3);
 
@@ -178,6 +179,14 @@ void SharedStatus::add_row(
     Gtk::Box& column, const char* name,
     Gtk::Label& value, int row_number)
 {
+    auto* label = Gtk::make_managed<Gtk::Label>(name);
+    add_row(column, *label, value, row_number);
+}
+
+void SharedStatus::add_row(
+    Gtk::Box& column, Gtk::Label& label,
+    Gtk::Label& value, int row_number)
+{
     auto* row = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::HORIZONTAL, 10);
     row->set_hexpand(true);
@@ -185,17 +194,16 @@ void SharedStatus::add_row(
     row->add_css_class(
         row_number % 2 == 0 ? "scc-row-even" : "scc-row-odd");
 
-    auto* label = Gtk::make_managed<Gtk::Label>(name);
-    label->set_xalign(0.0f);
-    label->set_size_request(132, -1);
-    label->add_css_class("scc-row-name");
+    label.set_xalign(0.0f);
+    label.set_size_request(132, -1);
+    label.add_css_class("scc-row-name");
 
     value.set_xalign(0.0f);
     value.set_hexpand(true);
     value.set_wrap(true);
     value.set_selectable(true);
 
-    row->append(*label);
+    row->append(label);
     row->append(value);
     column.append(*row);
 }

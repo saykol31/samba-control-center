@@ -25,6 +25,12 @@ public:
     // ControlPage y MainWindow.
     void pick_windows_ip();
 
+    // Veredicto de carpeta (el chip que muestra
+    // HOME): público para que el REFRESH de FILE
+    // pueda refrescarlo vía ControlPage, igual que
+    // el RESET y el PICK cruzan entre páginas.
+    bool folder_exists();
+
 private:
     Gtk::Window* parent_window = nullptr;
    SharedStatus& shared_status_;
@@ -54,6 +60,7 @@ private:
    Gtk::Label& samba_status;
    Gtk::Label& tcpdump_status;
    Gtk::Label& folder_status;
+   Gtk::Label& folder_title;
    Gtk::Label& smbd_status;
    Gtk::Label& nmbd_status;
    Gtk::Label& firewall_status;
@@ -197,8 +204,6 @@ private:
      * CARPETA
      * ------------------------------------------------------------
      */
-
-    bool folder_exists();
 
     bool create_shared_folder();
 

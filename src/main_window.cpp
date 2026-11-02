@@ -20,6 +20,9 @@ MainWindow::MainWindow() {
     auto* control_page =
         Gtk::make_managed<ControlPage>(*this, shared_status);
 
+    auto* file_page =
+        Gtk::make_managed<FilePage>();
+
     // El RESET de HOME acciona el reinicio del panel de
     // CONTROL: una sola implementación para los dos sitios.
     home_page->signal_reset_requested.connect(
@@ -28,6 +31,17 @@ MainWindow::MainWindow() {
                 *control_page,
                 &ControlPage::restart_services
             )
+        )
+    );
+
+    // El REFRESH de FILE también refresca el
+    // veredicto de carpeta que muestra HOME (vía el
+    // panel de CONTROL): la carpeta de FILE y la de
+    // HOME son la misma y deben decir lo mismo.
+    file_page->signal_refresh_requested.connect(
+        sigc::mem_fun(
+            *control_page,
+            &ControlPage::refresh_folder_status
         )
     );
 
@@ -46,7 +60,7 @@ MainWindow::MainWindow() {
     );
 
     notebook.append_page(*home_page, "HOME");
-    notebook.append_page(*Gtk::make_managed<FilePage>(), "FILE");
+    notebook.append_page(*file_page, "FILE");
     notebook.append_page(*control_page, "CONTROL");
     notebook.append_page(*Gtk::make_managed<UserPage>(), "USER");
     notebook.append_page(*settings_page, "SETTINGS");

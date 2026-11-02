@@ -338,6 +338,19 @@ static fs::path windows_config_file()
         / "config";
 }
 
+struct FirstShareInfo
+{
+    std::string name;
+    std::string folder;
+};
+
+// Definidos junto a load_file_shares(); se declaran
+// aqui porque la cabecera del constructor ya
+// anuncia la carpeta de FILE.
+static bool first_configured_share(FirstShareInfo& out);
+static std::string announced_share_folder(
+    const std::string& fallback);
+
 static bool is_valid_ipv4(const std::string& address)
 {
     struct in_addr parsed_address{};
@@ -567,6 +580,7 @@ SambaControlCenterPanel::SambaControlCenterPanel(
       samba_status(shared_status.samba()),
       tcpdump_status(shared_status.tcpdump()),
       folder_status(shared_status.folder()),
+      folder_title(shared_status.folder_title()),
       smbd_status(shared_status.smbd()),
       nmbd_status(shared_status.nmbd()),
       firewall_status(shared_status.firewall()),
@@ -607,7 +621,7 @@ SambaControlCenterPanel::SambaControlCenterPanel(
 
     append_log(
         "Carpeta: " +
-        shared_folder
+        announced_share_folder(shared_folder)
     );
 
     append_log(
@@ -2094,6 +2108,70 @@ static std::vector<PanelShare> load_file_shares(
     return result;
 }
 
+// La primera share que el usuario guardó en FILE,
+// exista o no su carpeta: su nombre y su ruta tal
+// como están en el config. Es la identidad que
+// HOME y la cabecera deben anunciar; la ~/Red
+// histórica solo vale si FILE nunca guardó nada.
+static bool first_configured_share(FirstShareInfo& out)
+{
+    std::ifstream input(windows_config_file());
+    std::string line;
+
+    while (input && std::getline(input, line))
+    {
+        const std::string clean = trim(line);
+
+        if (clean.rfind("share=", 0) != 0)
+            continue;
+
+        const std::string rest = clean.substr(6);
+        const auto first = rest.find('|');
+        const auto last = rest.rfind('|');
+
+        if (first == std::string::npos ||
+            last == std::string::npos || last == first)
+            continue;
+
+        const auto middle = rest.rfind('|', last - 1);
+
+        if (middle == std::string::npos || middle == first)
+            continue;
+
+        const std::string folder = trim(
+            rest.substr(first + 1, middle - first - 1));
+
+        if (folder.empty())
+            continue;
+
+        out.name = sanitize_share_name(
+            trim(rest.substr(0, first)), folder);
+        out.folder = folder;
+        return true;
+    }
+
+    return false;
+}
+
+// La carpeta que anuncia la cabecera del registro:
+// la que se está usando según FILE.
+static std::string announced_share_folder(
+    const std::string& fallback)
+{
+    bool has_lines = false;
+    const auto shares = load_file_shares(has_lines);
+
+    if (!shares.empty())
+        return shares.front().folder;
+
+    FirstShareInfo first;
+
+    if (first_configured_share(first))
+        return first.folder;
+
+    return fallback;
+}
+
 
 std::string SambaControlCenterPanel::prepare_samba_config_file()
 {
@@ -2886,22 +2964,89 @@ bool SambaControlCenterPanel::folder_exists()
         "CARPETA COMPARTIDA"
     );
 
+    /*
+     * Desde la v3 las carpetas se crean en FILE:
+     * el veredicto sale de las líneas share= del
+     * config, no de la ~/Red histórica.
+     *
+     * - Hay shares de FILE y existen: EXISTE, y el
+     *   registro nombra esas carpetas (las que se
+     *   están usando).
+     * - FILE guardó shares pero ninguna carpeta
+     *   existe: NO EXISTE, en rojo — es un dato.
+     * - FILE nunca guardó nada: si la ~/Red
+     *   histórica existe, EXISTE; si no, no es un
+     *   error — falta crearla, y se crea en FILE:
+     *   aviso en amarillo, no alarma en rojo.
+     *
+     * El título de la fila en HOME sigue la misma
+     * regla: nombra la carpeta de FILE.
+     */
+    bool has_lines = false;
+
+    const auto shares =
+        load_file_shares(has_lines);
+
+    if (!shares.empty())
+    {
+        folder_title.set_text(
+            "Carpeta " + shares.front().name
+        );
+    }
+    else
+    {
+        FirstShareInfo first_configured;
+
+        if (first_configured_share(first_configured))
+        {
+            folder_title.set_text(
+                "Carpeta " + first_configured.name
+            );
+        }
+        else
+        {
+            folder_title.set_text("Carpeta Red");
+        }
+    }
+
+    if (!shares.empty())
+    {
+        for (const auto& share : shares)
+        {
+            append_log(
+                "[OK] Existe: " +
+                share.folder
+            );
+        }
+
+        set_status(
+            folder_status,
+            "EXISTE",
+            true
+        );
+
+        return true;
+    }
+
+    if (has_lines)
+    {
+        append_log(
+            "[FALTA] Las carpetas creadas en FILE "
+            "no existen."
+        );
+
+        set_status(
+            folder_status,
+            "NO EXISTE",
+            false
+        );
+
+        return false;
+    }
+
     std::error_code ec;
 
-    const bool exists =
-        fs::exists(
-            shared_folder,
-            ec
-        );
-
-    const bool directory =
-        exists &&
-        fs::is_directory(
-            shared_folder,
-            ec
-        );
-
-    if (directory)
+    if (fs::is_directory(shared_folder, ec))
     {
         append_log(
             "[OK] Existe: " +
@@ -2918,14 +3063,13 @@ bool SambaControlCenterPanel::folder_exists()
     }
 
     append_log(
-        "[FALTA] No existe: " +
-        shared_folder
+        "[INFO] Todavía no hay carpeta compartida: "
+        "créala en la pestaña FILE."
     );
 
-    set_status(
+    set_status_unknown(
         folder_status,
-        "NO EXISTE",
-        false
+        "CREAR CARPETA EN FILE"
     );
 
     return false;
@@ -5114,7 +5258,7 @@ void SambaControlCenterPanel::clear_log()
 
     append_log(
         "Share: " +
-        shared_folder
+        announced_share_folder(shared_folder)
     );
 }
 

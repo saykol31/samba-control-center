@@ -10,6 +10,7 @@ public:
     Gtk::Label& samba() { return samba_status_; }
     Gtk::Label& tcpdump() { return tcpdump_status_; }
     Gtk::Label& folder() { return folder_status_; }
+    Gtk::Label& folder_title() { return folder_title_; }
     Gtk::Label& smbd() { return smbd_status_; }
     Gtk::Label& nmbd() { return nmbd_status_; }
     Gtk::Label& firewall() { return firewall_status_; }
@@ -21,10 +22,13 @@ private:
     Gtk::Label overall_text_;
 
     Gtk::Label samba_status_, tcpdump_status_, folder_status_;
+    Gtk::Label folder_title_;
     Gtk::Label smbd_status_, nmbd_status_, firewall_status_;
     Gtk::Label ports_status_, network_status_;
 
     void add_row(Gtk::Box& column, const char* name,
+                 Gtk::Label& value, int row_number);
+    void add_row(Gtk::Box& column, Gtk::Label& name_label,
                  Gtk::Label& value, int row_number);
     void refresh_overall_status();
     static std::string normalized_status(const Gtk::Label& label);
