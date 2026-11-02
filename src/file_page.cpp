@@ -678,25 +678,24 @@ void FilePage::on_add_folder()
     if (!window)
         return;
 
-    folder_dialog_ = Gtk::FileDialog::create();
-    folder_dialog_->set_title("Select a folder to share");
-
-    folder_dialog_->select_folder(
+    folder_dialog_ = Gtk::FileChooserNative::create(
+        "Select a folder to share",
         *window,
-        [this](Glib::RefPtr<Gio::AsyncResult>& result) {
-            try
+        Gtk::FileChooser::Action::SELECT_FOLDER);
+
+    folder_dialog_->signal_response().connect(
+        [this](int response) {
+            if (response == Gtk::ResponseType::ACCEPT)
             {
-                auto file =
-                    folder_dialog_->select_folder_finish(result);
+                auto file = folder_dialog_->get_file();
 
                 if (file)
                     add_folder(file->get_path());
             }
-            catch (const Glib::Error&)
-            {
-                // Cancelado por el usuario: nada que hacer.
-            }
 
+            // Cancelado o aceptado: el diálogo ya cumplió.
             folder_dialog_.reset();
         });
+
+    folder_dialog_->show();
 }

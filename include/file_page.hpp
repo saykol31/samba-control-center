@@ -86,7 +86,10 @@ private:
     Gtk::Button btn_remove_{"REMOVE"};
     Gtk::Button btn_refresh_{"REFRESH"};
 
-    Glib::RefPtr<Gtk::FileDialog> folder_dialog_;
+    // FileChooserNative (gtkmm 4.0+) en vez de FileDialog
+    // (gtkmm 4.10+): el mismo código compila en la MX
+    // (gtkmm 4.8, Debian 12) y en la Surface (4.18).
+    Glib::RefPtr<Gtk::FileChooserNative> folder_dialog_;
     bool syncing_ = false;
 
     Glib::RefPtr<Gtk::SignalListItemFactory> make_text_factory(
