@@ -1782,6 +1782,175 @@ bool SambaControlCenterPanel::check_testparm()
  */
 
 
+/*
+ * ------------------------------------------------------------
+ * Rebanada 4 (CONFIGURAR multi-share): lectura de los
+ * valores que SETTINGS y FILE guardan en el config.
+ * ------------------------------------------------------------
+ */
+
+struct PanelShare
+{
+    std::string name;
+    std::string folder;
+    bool read_only = false;
+    bool visible = true;
+};
+
+
+// Valor suelto del config (solo lectura, sin crear el
+// archivo): "", si la clave no está.
+static std::string load_config_value(
+    const std::string& wanted_key)
+{
+    std::ifstream input(windows_config_file());
+    std::string line;
+
+    while (input && std::getline(input, line))
+    {
+        line = trim(line);
+
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        const std::string prefix = wanted_key + "=";
+
+        if (line.rfind(prefix, 0) == 0)
+            return trim(line.substr(prefix.size()));
+    }
+
+    return "";
+}
+
+
+// El nombre de una sección de smb.conf no puede llevar
+// '[', ']' ni saltos de línea: se retiran. Si no queda
+// nada, manda la base de la ruta (como en FILE).
+static std::string sanitize_share_name(
+    const std::string& raw,
+    const std::string& folder)
+{
+    std::string clean;
+
+    for (const char c : raw)
+    {
+        if (c == '[' || c == ']' || c == '\n' || c == '\r')
+            continue;
+
+        clean += c;
+    }
+
+    clean = trim(clean);
+
+    if (!clean.empty())
+        return clean;
+
+    const std::string base =
+        fs::path(folder).filename().string();
+
+    return base.empty() ? folder : base;
+}
+
+
+// Lee las líneas share= del config con el MISMO formato
+// que FilePage::load_shares (nombre|ruta|ro/rw|visible)
+// y la MISMA semántica de activas que
+// FilePage::active_shares: solo carpetas existentes.
+// has_lines distingue "FILE nunca guardó nada" (vale el
+// comportamiento histórico) de "guardó, pero ninguna
+// carpeta existe" (smb.conf sin shares).
+static std::vector<PanelShare> load_file_shares(
+    bool& has_lines)
+{
+    has_lines = false;
+
+    std::vector<PanelShare> result;
+
+    std::ifstream input(windows_config_file());
+    std::string line;
+
+    while (input && std::getline(input, line))
+    {
+        const std::string clean = trim(line);
+
+        if (clean.empty() || clean[0] == '#')
+            continue;
+
+        if (clean.rfind("share=", 0) != 0)
+            continue;
+
+        has_lines = true;
+
+        const std::string rest = clean.substr(6);
+
+        const auto first = rest.find('|');
+        const auto last = rest.rfind('|');
+
+        if (first == std::string::npos ||
+            last == std::string::npos || last == first)
+            continue;
+
+        const auto middle = rest.rfind('|', last - 1);
+
+        if (middle == std::string::npos || middle == first)
+            continue;
+
+        PanelShare share;
+
+        share.folder =
+            trim(rest.substr(first + 1, middle - first - 1));
+
+        const std::string perms =
+            trim(rest.substr(middle + 1, last - middle - 1));
+
+        const std::string visible =
+            trim(rest.substr(last + 1));
+
+        if (share.folder.empty())
+            continue;
+
+        std::error_code error;
+
+        if (!fs::is_directory(share.folder, error))
+            continue;
+
+        share.read_only = (perms == "ro");
+        share.visible = (visible != "0");
+        share.name = sanitize_share_name(
+            trim(rest.substr(0, first)),
+            share.folder);
+
+        // Dos carpetas con el mismo nombre producirían
+        // secciones duplicadas: se numeran (2), (3)...
+        std::string candidate = share.name;
+        int suffix = 2;
+        bool clash = true;
+
+        while (clash)
+        {
+            clash = false;
+
+            for (const auto& existing : result)
+            {
+                if (existing.name == candidate)
+                {
+                    candidate =
+                        share.name + " (" +
+                        std::to_string(suffix++) + ")";
+                    clash = true;
+                    break;
+                }
+            }
+        }
+
+        share.name = candidate;
+        result.push_back(share);
+    }
+
+    return result;
+}
+
+
 std::string SambaControlCenterPanel::prepare_samba_config_file()
 {
     /*
@@ -1790,11 +1959,20 @@ std::string SambaControlCenterPanel::prepare_samba_config_file()
      * Devuelve la ruta del temporal o "" si falla.
      */
 
+    // El workgroup sale de SETTINGS (clave workgroup);
+    // sin valor guardado, el histórico WORKGROUP.
+    const std::string saved_workgroup =
+        load_config_value("workgroup");
+
     std::ostringstream cfg;
 
     cfg
         << "[global]\n"
-        << "    workgroup = WORKGROUP\n"
+        << "    workgroup = "
+        << (saved_workgroup.empty()
+                ? "WORKGROUP"
+                : saved_workgroup)
+        << "\n"
         << "    server string = Samba Server MX Linux\n"
         << "    server role = standalone server\n"
         << "    security = user\n"
@@ -1831,22 +2009,73 @@ std::string SambaControlCenterPanel::prepare_samba_config_file()
         << "\n"
         << "[print$]\n"
         << "    comment = Printer Drivers\n"
-        << "    path = /var/lib/samba/printers\n"
-        << "\n"
-        << "[compartida]\n"
-        << "    comment = Carpeta compartida de "
-        << samba_user << "\n"
-        << "    path = "
-        << shared_folder << "\n"
-        << "    browseable = yes\n"
-        << "    read only = no\n"
-        << "    writable = yes\n"
-        << "    valid users = "
-        << samba_user << "\n"
-        << "    force user = "
-        << samba_user << "\n"
-        << "    create mask = 0664\n"
-        << "    directory mask = 0775\n";
+        << "    path = /var/lib/samba/printers\n";
+
+    /*
+     * Shares (rebanada 4): una sección por carpeta
+     * activa de FILE. Sin líneas share= guardadas se
+     * conserva el comportamiento histórico exacto:
+     * [compartida] sobre shared_folder. Con líneas,
+     * manda FILE: las carpetas que no existen quedan
+     * fuera (ya filtradas en load_file_shares).
+     */
+    generated_shares_.clear();
+
+    bool has_share_lines = false;
+
+    const std::vector<PanelShare> file_shares =
+        load_file_shares(has_share_lines);
+
+    if (!has_share_lines)
+    {
+        cfg
+            << "\n"
+            << "[compartida]\n"
+            << "    comment = Carpeta compartida de "
+            << samba_user << "\n"
+            << "    path = "
+            << shared_folder << "\n"
+            << "    browseable = yes\n"
+            << "    read only = no\n"
+            << "    writable = yes\n"
+            << "    valid users = "
+            << samba_user << "\n"
+            << "    force user = "
+            << samba_user << "\n"
+            << "    create mask = 0664\n"
+            << "    directory mask = 0775\n";
+
+        generated_shares_.push_back(
+            {"compartida", shared_folder});
+    }
+    else
+    {
+        for (const auto& share : file_shares)
+        {
+            cfg
+                << "\n"
+                << "[" << share.name << "]\n"
+                << "    comment = Carpeta compartida de "
+                << samba_user << "\n"
+                << "    path = "
+                << share.folder << "\n"
+                << "    browseable = "
+                << (share.visible ? "yes" : "no") << "\n"
+                << "    read only = "
+                << (share.read_only ? "yes" : "no") << "\n"
+                << "    writable = "
+                << (share.read_only ? "no" : "yes") << "\n"
+                << "    valid users = "
+                << samba_user << "\n"
+                << "    force user = "
+                << samba_user << "\n"
+                << "    create mask = 0664\n"
+                << "    directory mask = 0775\n";
+
+            generated_shares_.push_back(
+                {share.name, share.folder});
+        }
+    }
 
     const std::string config =
         cfg.str();
@@ -1952,6 +2181,14 @@ void SambaControlCenterPanel::configure_samba()
     if (temp.empty())
         return;
 
+    if (generated_shares_.empty())
+    {
+        append_log(
+            "[WARN] FILE no tiene carpetas existentes: "
+            "el smb.conf saldrá sin shares."
+        );
+    }
+
     const bool has_nmbd =
         command_exists("nmbd");
 
@@ -1969,18 +2206,45 @@ void SambaControlCenterPanel::configure_samba()
     std::string script =
         "F=0\n";
 
+    /*
+     * Paso de carpetas (rebanada 4): prepara exactamente
+     * las carpetas que el smb.conf generado referencia.
+     * Sin shares, el paso es un "true" (éxito sin hacer
+     * nada) y el lote sigue su curso.
+     *
+     * El chown ya no es recursivo (-R): con varias
+     * carpetas del usuario, recorrerlas enteras tocaría
+     * permisos muy por debajo del share; basta la raíz,
+     * que es lo que Samba comprueba al montar.
+     */
+    std::string folder_command = "true";
+
+    if (!generated_shares_.empty())
+    {
+        folder_command.clear();
+
+        for (const auto& share : generated_shares_)
+        {
+            if (!folder_command.empty())
+                folder_command += " && ";
+
+            folder_command +=
+                "mkdir -p " +
+                shell_escape(share.folder) +
+                " && chown " +
+                shell_escape(
+                    samba_user + ":" + samba_user
+                ) +
+                " " +
+                shell_escape(share.folder) +
+                " && chmod 0775 " +
+                shell_escape(share.folder);
+        }
+    }
+
     script += batch_step(
         "folder",
-        "mkdir -p " +
-            shell_escape(shared_folder) +
-            " && chown -R " +
-            shell_escape(
-                samba_user + ":" + samba_user
-            ) +
-            " " +
-            shell_escape(shared_folder) +
-            " && chmod 0775 " +
-            shell_escape(shared_folder)
+        folder_command
     );
 
     // Validar el temporal ANTES de tocar el smb.conf actual.
@@ -2117,10 +2381,13 @@ void SambaControlCenterPanel::configure_samba()
         "[OK] Carpeta creada/verificada."
     );
 
-    append_log(
-        "Ruta: " +
-        shared_folder
-    );
+    for (const auto& share : generated_shares_)
+    {
+        append_log(
+            "Ruta: " +
+            share.folder
+        );
+    }
 
     set_status(
         folder_status,
@@ -2227,14 +2494,17 @@ void SambaControlCenterPanel::configure_samba()
         "[OK] smb.conf actualizado."
     );
 
-    append_log(
-        "Share: [compartida]"
-    );
+    for (const auto& share : generated_shares_)
+    {
+        append_log(
+            "Share: [" + share.name + "]"
+        );
 
-    append_log(
-        "Path: " +
-        shared_folder
-    );
+        append_log(
+            "Path: " +
+            share.folder
+        );
+    }
 
     append_log(
         "User: " +

@@ -92,6 +92,18 @@ private:
     // IP del equipo Windows cargada desde la configuración del usuario.
     std::string windows_ip;
 
+    // Shares emitidos por la última generación de smb.conf
+    // (rebanada 4, CONFIGURAR multi-share): prepare los
+    // rellena y configure_samba los usa para el paso de
+    // carpetas del lote y para el registro final.
+    struct GeneratedShare
+    {
+        std::string name;
+        std::string folder;
+    };
+
+    std::vector<GeneratedShare> generated_shares_;
+
     /*
      * ------------------------------------------------------------
      * GUI
