@@ -40,6 +40,19 @@ La aplicación arranca **sin privilegios**: lee tu usuario y tu carpeta
 personal, y solo pide autorización de administrador cuando una acción lo
 necesita.
 
+### Si lo corres en WSL
+
+La imagen de Debian para WSL no trae `konsole`, la terminal donde la
+aplicación muestra la instalación de dependencias. Instálala a mano una
+vez, antes de abrir la aplicación:
+
+```bash
+sudo apt install konsole
+```
+
+Sin ella la aplicación avisa de que falta y no puede abrir la consola de
+instalación; todo lo demás funciona igual.
+
 ## Cómo funciona
 
 ### La ventana
