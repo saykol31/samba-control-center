@@ -645,7 +645,6 @@ SambaControlCenterPanel::SambaControlCenterPanel(
         );
     }
 
-    check_dependencies();
     check_samba();
     folder_exists();
     check_services();
@@ -697,32 +696,26 @@ void SambaControlCenterPanel::setup_ui()
      */
 
     configure_button(
-        btn_install,
-        "DEPENDENCIAS",
-        "Verificar e instalar dependencias"
-    );
-
-    configure_button(
         btn_configure,
-        "CONFIGURAR SAMBA",
+        "👏 SAMBA",
         "Crear carpeta y configurar Samba"
     );
 
     configure_button(
         btn_password,
-        "CONTRASEÑA SAMBA",
+        "🔑 PASSWORD SAMBA",
         "Crear o cambiar contraseña Samba"
     );
 
     configure_button(
         btn_firewall,
-        "FIREWALL UFW",
+        "🛡 UFW",
         "Configurar firewall para Samba"
     );
 
     configure_button(
         btn_ports,
-        "PUERTOS 139/445",
+        "🔌 PORTS 139/445",
         "Comprobar puertos Samba"
     );
 
@@ -734,31 +727,31 @@ void SambaControlCenterPanel::setup_ui()
 
     configure_button(
         btn_ping,
-        "PING WINDOWS",
+        "🎯 PING WINDOWS",
         "Probar conectividad con Windows"
     );
 
     configure_button(
         btn_smbclient,
-        "PRUEBA SMB",
+        "✅ SMB TEST",
         "Probar smbclient"
     );
 
     configure_button(
         btn_tcpdump,
-        "TCPDUMP",
+        "⌨ TCPDUMP",
         "Diagnóstico de tráfico SMB"
     );
 
     configure_button(
         btn_diagnose,
-        "DIAGNÓSTICO COMPLETO",
+        "🩺 FULL DIAGNOSTIC",
         "Ejecutar diagnóstico completo"
     );
 
     configure_button(
         btn_clear,
-        "LIMPIAR",
+        "CLEAR",
         "Limpiar consola"
     );
 
@@ -766,56 +759,55 @@ void SambaControlCenterPanel::setup_ui()
 
    configure_button(
        btn_interfaces,
-       "INTERFACES",
+       "📟 INTERFACES",
        "Mostrar las interfaces de red disponibles"
    );
 
    configure_button(
        btn_routes,
-       "RUTAS DE RED",
+       "🔀 NET&ROUTES",
        "Mostrar la tabla de rutas del sistema"
    );
 
    configure_button(
        btn_gateway,
-       "PUERTA DE ENLACE",
+       "🎧 GATEWAY",
        "Mostrar la puerta de enlace de la red"
    );
 
    configure_button(
        btn_neighbors,
-       "VECINOS DE RED",
+       "☍ NETWORK NEIGHBORS",
        "Mostrar vecinos ARP y entradas de red"
    );
 
    configure_button(
        btn_windows,
-       "RED WINDOWS",
+       "🌐 WINDOWS NETWORK",
        "Mostrar información de red del equipo Windows"
    );
 
    configure_button(
        btn_tcp445,
-       "TCP 445 WINDOWS",
+       "⇄ TCP 445 WINDOWS",
        "Probar conectividad TCP con el puerto 445 de Windows"
    );
 
    configure_button(
        btn_config_win,
-       "CONFIG WIN",
+       "⚙ CONFIG WIN",
        "Configurar la dirección IPv4 del equipo Windows"
    );
 
 
    configure_button(
        btn_scan_red,
-       "ESCANEAR RED",
+       "🔍 SCAN NETWORK",
        "Descubrir equipos en las subredes IPv4 locales"
    );
    // Botones compactos: cuatro columnas, sin encabezados intermedios.
-   button_grid->attach(btn_install,    0, 0);
-   button_grid->attach(btn_configure,  1, 0);
-   button_grid->attach(btn_password,   2, 0);
+   button_grid->attach(btn_configure,  0, 0);
+   button_grid->attach(btn_password,   1, 0);
 
    button_grid->attach(btn_scan_red,   0, 1);
    button_grid->attach(btn_config_win, 1, 1);
@@ -865,9 +857,9 @@ void SambaControlCenterPanel::setup_ui()
       );
    }
 
-   // Los 19 botones, incluido LIMPIAR.
+   // Los 18 botones, incluido LIMPIAR.
    for (auto* button : {
-         &btn_install, &btn_configure, &btn_password,
+         &btn_configure, &btn_password,
          &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
          &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
          &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -879,7 +871,7 @@ void SambaControlCenterPanel::setup_ui()
    // Al hacer clic, solo cambia qué botón queda marcado.
    // Las conexiones originales de las acciones se conservan.
    for (auto* button : {
-         &btn_install, &btn_configure, &btn_password,
+         &btn_configure, &btn_password,
          &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
          &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
          &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -887,7 +879,7 @@ void SambaControlCenterPanel::setup_ui()
    }) {
       button->signal_clicked().connect([this, button]() {
          for (auto* candidate : {
-               &btn_install, &btn_configure, &btn_password,
+               &btn_configure, &btn_password,
                &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
                &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
                &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
@@ -997,13 +989,6 @@ void SambaControlCenterPanel::setup_ui()
      * Cada botón se conecta UNA SOLA VEZ.
      *
      */
-
-    btn_install.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenterPanel::check_dependencies
-        )
-    );
 
     btn_configure.signal_clicked().connect(
         sigc::mem_fun(

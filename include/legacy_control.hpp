@@ -67,7 +67,6 @@ private:
    Gtk::Label& ports_status;
    Gtk::Label& network_status;
 
-    Gtk::Button btn_install;
     Gtk::Button btn_configure;
     Gtk::Button btn_password;
     Gtk::Button btn_firewall;

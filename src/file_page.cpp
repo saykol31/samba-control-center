@@ -242,8 +242,9 @@ FilePage::FilePage()
             "State",
             make_state_factory()));
 
-    auto* title = Gtk::make_managed<Gtk::Label>(
-        "FILE — Shared folders");
+    auto* title = Gtk::make_managed<Gtk::Label>();
+    title->set_markup(
+        "<b>FILE — 🖳 SHARED FOLDERS</b>");
     title->set_halign(Gtk::Align::START);
     append(*title);
 

@@ -118,8 +118,9 @@ SharedStatus::SharedStatus()
     network_card->set_hexpand(true);
     network_card->add_css_class("scc-card");
 
-    auto* network_title = Gtk::make_managed<Gtk::Label>(
-        "RED E IDENTIDAD");
+    auto* network_title = Gtk::make_managed<Gtk::Label>();
+    network_title->set_markup(
+        "<b>⁂ NETWORK &amp; IDENTITY</b>");
     network_title->set_halign(Gtk::Align::START);
     network_title->add_css_class("scc-card-title");
     network_card->append(*network_title);
@@ -129,8 +130,9 @@ SharedStatus::SharedStatus()
     system_card->set_hexpand(true);
     system_card->add_css_class("scc-card");
 
-    auto* system_title = Gtk::make_managed<Gtk::Label>(
-        "SISTEMA Y SERVICIOS");
+    auto* system_title = Gtk::make_managed<Gtk::Label>();
+    system_title->set_markup(
+        "<b>⚙ SYSTEM &amp; SERVICES</b>");
     system_title->set_halign(Gtk::Align::START);
     system_title->add_css_class("scc-card-title");
     system_card->append(*system_title);

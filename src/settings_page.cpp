@@ -295,7 +295,7 @@ SettingsPage::SettingsPage()
     // ---------------- SERVER ----------------
 
     auto* server_title = Gtk::make_managed<Gtk::Label>();
-    server_title->set_markup("<b>SERVER</b>");
+    server_title->set_markup("<b>🖳 SERVER</b>");
     server_title->set_halign(Gtk::Align::START);
     content->append(*server_title);
 
@@ -322,7 +322,7 @@ SettingsPage::SettingsPage()
     // ---------------- CLIENT ----------------
 
     auto* client_title = Gtk::make_managed<Gtk::Label>();
-    client_title->set_markup("<b>CLIENT</b>");
+    client_title->set_markup("<b>🖥 CLIENT</b>");
     client_title->set_halign(Gtk::Align::START);
     content->append(*client_title);
 

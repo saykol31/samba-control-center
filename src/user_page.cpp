@@ -312,7 +312,7 @@ UserPage::UserPage()
     auto* server_box = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::VERTICAL, 8);
     server_box->append(
-        *make_column_title("<b>SERVER — Samba users</b>"));
+        *make_column_title("<b>🖳 SERVER — Samba users</b>"));
 
     server_box->append(*make_list_scroller(users_list_, 130));
 
@@ -336,7 +336,7 @@ UserPage::UserPage()
     auto* user_actions = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::HORIZONTAL, 8);
     auto* btn_password =
-        Gtk::make_managed<Gtk::Button>("SET PASSWORD");
+        Gtk::make_managed<Gtk::Button>("🔑 SET PASSWORD");
     btn_password->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_set_password));
     user_actions->append(*btn_password);
@@ -351,7 +351,7 @@ UserPage::UserPage()
         sigc::mem_fun(*this, &UserPage::on_disable_user));
     user_actions->append(*btn_disable);
     auto* btn_delete =
-        Gtk::make_managed<Gtk::Button>("DELETE");
+        Gtk::make_managed<Gtk::Button>("🗑 DELETE");
     btn_delete->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_delete_user));
     user_actions->append(*btn_delete);
@@ -363,7 +363,7 @@ UserPage::UserPage()
     auto* client_box = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::VERTICAL, 8);
     client_box->append(
-        *make_column_title("<b>CLIENT — Connect to shares</b>"));
+        *make_column_title("<b>🖥 CLIENT — Connect to shares</b>"));
 
     auto* server_row = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::HORIZONTAL, 8);
@@ -373,7 +373,7 @@ UserPage::UserPage()
     server_entry_.set_placeholder_text("IP or name");
     server_entry_.set_hexpand(true);
     server_row->append(server_entry_);
-    scan_button_ = Gtk::make_managed<Gtk::Button>("SCAN");
+    scan_button_ = Gtk::make_managed<Gtk::Button>("🔍 SCAN");
     scan_button_->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_scan));
     server_row->append(*scan_button_);
@@ -408,16 +408,16 @@ UserPage::UserPage()
     auto* share_actions = Gtk::make_managed<Gtk::Box>(
         Gtk::Orientation::HORIZONTAL, 8);
     auto* btn_connect =
-        Gtk::make_managed<Gtk::Button>("CONNECT");
+        Gtk::make_managed<Gtk::Button>("🔗 CONNECT");
     btn_connect->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_connect));
     share_actions->append(*btn_connect);
-    auto* btn_open = Gtk::make_managed<Gtk::Button>("OPEN");
+    auto* btn_open = Gtk::make_managed<Gtk::Button>("📂 OPEN");
     btn_open->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_open_share));
     share_actions->append(*btn_open);
     auto* btn_disconnect =
-        Gtk::make_managed<Gtk::Button>("DISCONNECT");
+        Gtk::make_managed<Gtk::Button>("↕ DISCONNECT");
     btn_disconnect->signal_clicked().connect(
         sigc::mem_fun(*this, &UserPage::on_disconnect));
     share_actions->append(*btn_disconnect);
