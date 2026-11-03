@@ -51,7 +51,13 @@ private:
         const char* command;
         const char* package;
         bool required;
+        // Sonda opcional: comando de shell cuyo éxito significa
+        // "presente" (para lo que no es un ejecutable, como las
+        // fuentes). Vacía = se busca el ejecutable `command`.
+        const char* probe = nullptr;
     };
+
+    bool dependency_present(const Dependency& dep) const;
 
     static const std::vector<Dependency>& dependency_table();
 

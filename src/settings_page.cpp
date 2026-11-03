@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -242,6 +243,14 @@ SettingsPage::dependency_table()
         {"Network scan",        "nmap",       "nmap",             false},
         {"CIFS mount",          "mount.cifs", "cifs-utils",       false},
         {"GVfs",                "gio",        "gvfs",             false},
+        {"Install console",     "konsole",    "konsole",          false},
+        {"Noto fonts",          "Noto Sans",  "fonts-noto-core",  false,
+            "fc-list | grep -qi 'noto sans'"},
+        {"Emoji font",          "Noto Color Emoji",
+            "fonts-noto-color-emoji", false,
+            "fc-list | grep -qi 'noto color emoji'"},
+        {"DejaVu fonts",        "DejaVu Sans", "fonts-dejavu-core", false,
+            "fc-list | grep -qi 'dejavu sans'"},
     };
 
     return table;
@@ -494,6 +503,21 @@ void SettingsPage::on_save_values()
  * ------------------------------------------------------------
  */
 
+bool SettingsPage::dependency_present(
+    const Dependency& dep) const
+{
+    if (dep.probe && dep.probe[0])
+    {
+        const std::string probe_cmd =
+            std::string(dep.probe) + " >/dev/null 2>&1";
+
+        return std::system(probe_cmd.c_str()) == 0;
+    }
+
+    return command_exists(dep.command);
+}
+
+
 std::vector<const SettingsPage::Dependency*>
 SettingsPage::missing_dependencies() const
 {
@@ -501,7 +525,7 @@ SettingsPage::missing_dependencies() const
 
     for (const auto& dep : dependency_table())
     {
-        if (!command_exists(dep.command))
+        if (!dependency_present(dep))
             missing.push_back(&dep);
     }
 
@@ -517,7 +541,7 @@ void SettingsPage::refresh_dependencies()
 
     for (const auto& dep : table)
     {
-        if (command_exists(dep.command))
+        if (dependency_present(dep))
         {
             ++satisfied;
             text += "[OK] ";
