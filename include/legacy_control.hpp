@@ -68,19 +68,12 @@ private:
    Gtk::Label& network_status;
 
     Gtk::Button btn_configure;
-    Gtk::Button btn_password;
     Gtk::Button btn_firewall;
     Gtk::Button btn_ports;
-    Gtk::Button btn_network;
     Gtk::Button btn_interfaces;
     Gtk::Button btn_routes;
-    Gtk::Button btn_gateway;
-    Gtk::Button btn_neighbors;
     Gtk::Button btn_windows;
-    Gtk::Button btn_tcp445;
-   Gtk::Button btn_config_win;
    Gtk::Button btn_scan_red;
-    Gtk::Button btn_ping;
     Gtk::Button btn_smbclient;
     Gtk::Button btn_tcpdump;
     Gtk::Button btn_diagnose;

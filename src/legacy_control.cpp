@@ -702,12 +702,6 @@ void SambaControlCenterPanel::setup_ui()
     );
 
     configure_button(
-        btn_password,
-        "🔑 PASSWORD SAMBA",
-        "Crear o cambiar contraseña Samba"
-    );
-
-    configure_button(
         btn_firewall,
         "🛡 UFW",
         "Configurar firewall para Samba"
@@ -717,18 +711,6 @@ void SambaControlCenterPanel::setup_ui()
         btn_ports,
         "🔌 PORTS 139/445",
         "Comprobar puertos Samba"
-    );
-
-    configure_button(
-        btn_network,
-        "RED / RUTAS",
-        "Mostrar interfaces, rutas y vecinos"
-    );
-
-    configure_button(
-        btn_ping,
-        "🎯 PING WINDOWS",
-        "Probar conectividad con Windows"
     );
 
     configure_button(
@@ -765,38 +747,14 @@ void SambaControlCenterPanel::setup_ui()
 
    configure_button(
        btn_routes,
-       "🔀 NET&ROUTES",
+       "🔀 NET & ROUTES",
        "Mostrar la tabla de rutas del sistema"
-   );
-
-   configure_button(
-       btn_gateway,
-       "🎧 GATEWAY",
-       "Mostrar la puerta de enlace de la red"
-   );
-
-   configure_button(
-       btn_neighbors,
-       "☍ NETWORK NEIGHBORS",
-       "Mostrar vecinos ARP y entradas de red"
    );
 
    configure_button(
        btn_windows,
        "🌐 WINDOWS NETWORK",
        "Mostrar información de red del equipo Windows"
-   );
-
-   configure_button(
-       btn_tcp445,
-       "⇄ TCP 445 WINDOWS",
-       "Probar conectividad TCP con el puerto 445 de Windows"
-   );
-
-   configure_button(
-       btn_config_win,
-       "⚙ CONFIG WIN",
-       "Configurar la dirección IPv4 del equipo Windows"
    );
 
 
@@ -807,26 +765,17 @@ void SambaControlCenterPanel::setup_ui()
    );
    // Botones compactos: cuatro columnas, sin encabezados intermedios.
    button_grid->attach(btn_configure,  0, 0);
-   button_grid->attach(btn_password,   1, 0);
+   button_grid->attach(btn_scan_red,   1, 0);
+   button_grid->attach(btn_diagnose,   2, 0);
+   button_grid->attach(btn_firewall,   3, 0);
 
-   button_grid->attach(btn_scan_red,   0, 1);
-   button_grid->attach(btn_config_win, 1, 1);
-   button_grid->attach(btn_ping,       2, 1);
-   button_grid->attach(btn_tcp445,     3, 1);
+   button_grid->attach(btn_ports,      0, 1);
+   button_grid->attach(btn_smbclient,  1, 1);
+   button_grid->attach(btn_tcpdump,    2, 1);
+   button_grid->attach(btn_interfaces, 3, 1);
 
-   button_grid->attach(btn_diagnose,   0, 2);
-   button_grid->attach(btn_firewall,   1, 2);
-   button_grid->attach(btn_ports,      2, 2);
-   button_grid->attach(btn_smbclient,  3, 2);
-
-   button_grid->attach(btn_tcpdump,    0, 3);
-   button_grid->attach(btn_network,    1, 3);
-   button_grid->attach(btn_interfaces, 2, 3);
-   button_grid->attach(btn_routes,     3, 3);
-
-   button_grid->attach(btn_gateway,    0, 4);
-   button_grid->attach(btn_neighbors,  1, 4);
-   button_grid->attach(btn_windows,    2, 4);
+   button_grid->attach(btn_routes,     0, 2);
+   button_grid->attach(btn_windows,    1, 2);
 
    // LIMPIAR permanece junto a la consola.
    main_box.append(*button_grid);
@@ -857,13 +806,12 @@ void SambaControlCenterPanel::setup_ui()
       );
    }
 
-   // Los 18 botones, incluido LIMPIAR.
+   // Los 11 botones, incluido LIMPIAR.
    for (auto* button : {
-         &btn_configure, &btn_password,
-         &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
-         &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
-         &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
-         &btn_smbclient, &btn_tcpdump, &btn_diagnose, &btn_clear
+         &btn_configure, &btn_firewall, &btn_ports,
+         &btn_interfaces, &btn_routes, &btn_windows,
+         &btn_scan_red, &btn_smbclient, &btn_tcpdump,
+         &btn_diagnose, &btn_clear
    }) {
       button->add_css_class("scc-control-button");
    }
@@ -871,19 +819,17 @@ void SambaControlCenterPanel::setup_ui()
    // Al hacer clic, solo cambia qué botón queda marcado.
    // Las conexiones originales de las acciones se conservan.
    for (auto* button : {
-         &btn_configure, &btn_password,
-         &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
-         &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
-         &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
-         &btn_smbclient, &btn_tcpdump, &btn_diagnose, &btn_clear
+         &btn_configure, &btn_firewall, &btn_ports,
+         &btn_interfaces, &btn_routes, &btn_windows,
+         &btn_scan_red, &btn_smbclient, &btn_tcpdump,
+         &btn_diagnose, &btn_clear
    }) {
       button->signal_clicked().connect([this, button]() {
          for (auto* candidate : {
-               &btn_configure, &btn_password,
-               &btn_firewall, &btn_ports, &btn_network, &btn_interfaces,
-               &btn_routes, &btn_gateway, &btn_neighbors, &btn_windows,
-               &btn_tcp445, &btn_config_win, &btn_scan_red, &btn_ping,
-               &btn_smbclient, &btn_tcpdump, &btn_diagnose, &btn_clear
+               &btn_configure, &btn_firewall, &btn_ports,
+               &btn_interfaces, &btn_routes, &btn_windows,
+               &btn_scan_red, &btn_smbclient, &btn_tcpdump,
+               &btn_diagnose, &btn_clear
          }) {
             candidate->remove_css_class("scc-control-selected");
          }
@@ -997,13 +943,6 @@ void SambaControlCenterPanel::setup_ui()
         )
     );
 
-    btn_password.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenterPanel::show_password_dialog
-        )
-    );
-
     btn_firewall.signal_clicked().connect(
         sigc::hide_return(
             sigc::mem_fun(
@@ -1017,20 +956,6 @@ void SambaControlCenterPanel::setup_ui()
         sigc::mem_fun(
             *this,
             &SambaControlCenterPanel::check_ports
-        )
-    );
-
-    btn_network.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenterPanel::show_routing
-        )
-    );
-
-    btn_ping.signal_clicked().connect(
-        sigc::mem_fun(
-            *this,
-            &SambaControlCenterPanel::ping_windows
         )
     );
 
@@ -1078,38 +1003,10 @@ void SambaControlCenterPanel::setup_ui()
        )
    );
 
-   btn_gateway.signal_clicked().connect(
-       sigc::mem_fun(
-           *this,
-           &SambaControlCenterPanel::show_gateway
-       )
-   );
-
-   btn_neighbors.signal_clicked().connect(
-       sigc::mem_fun(
-           *this,
-           &SambaControlCenterPanel::show_neighbors
-       )
-   );
-
    btn_windows.signal_clicked().connect(
        sigc::mem_fun(
            *this,
            &SambaControlCenterPanel::show_windows_network
-       )
-   );
-
-   btn_tcp445.signal_clicked().connect(
-       sigc::mem_fun(
-           *this,
-           &SambaControlCenterPanel::test_windows_tcp445
-       )
-   );
-
-   btn_config_win.signal_clicked().connect(
-       sigc::mem_fun(
-           *this,
-           &SambaControlCenterPanel::configure_windows
        )
    );
 
@@ -1632,64 +1529,6 @@ void SambaControlCenterPanel::check_dependencies()
         tcpdump
     );
 
-    append_log("");
-
-    append_log(
-        "smbclient: " +
-        std::string(
-            smbclient ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "smbpasswd: " +
-        std::string(
-            smbpasswd ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "testparm: " +
-        std::string(
-            testparm ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "ufw: " +
-        std::string(
-            ufw ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "ss: " +
-        std::string(
-            ss ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "ping: " +
-        std::string(
-            ping ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "nc: " +
-        std::string(
-            nc ? "OK" : "FALTA"
-        )
-    );
-
-    append_log(
-        "nmap: " +
-        std::string(
-            nmap ? "OK" : "FALTA"
-        )
-    );
-
     /*
      * Una sola instalación.
      */
@@ -1712,25 +1551,6 @@ void SambaControlCenterPanel::check_dependencies()
         }
     }
 
-    if (command_exists("smbd"))
-    {
-        append_log(
-            "Samba: " +
-            get_command_output(
-                "smbd --version"
-            )
-        );
-    }
-
-    if (command_exists("tcpdump"))
-    {
-        append_log(
-            "tcpdump: " +
-            get_command_output(
-                "tcpdump --version | head -n 1"
-            )
-        );
-    }
 }
 
 
@@ -2576,7 +2396,8 @@ void SambaControlCenterPanel::finish_configure_samba(
      */
 
     append_section(
-        "CREACIÓN DE CARPETA RED"
+        "CREACIÓN DE CARPETA " +
+        announced_share_folder(shared_folder)
     );
 
     segment =
@@ -3064,7 +2885,8 @@ bool SambaControlCenterPanel::folder_exists()
 bool SambaControlCenterPanel::create_shared_folder()
 {
     append_section(
-        "CREACIÓN DE CARPETA RED"
+        "CREACIÓN DE CARPETA " +
+        announced_share_folder(shared_folder)
     );
 
     std::string output;
@@ -4343,27 +4165,39 @@ void SambaControlCenterPanel::show_routes()
 
 void SambaControlCenterPanel::show_gateway()
 {
-    append_section("GATEWAY / ROUTER");
+    append_section("GATEWAY");
 
-    std::string output =
+    const std::string output =
         get_command_output(
             "ip route | grep '^default'"
         );
 
-    append_log(output);
+    /*
+     * De la línea "default via <ip> dev <iface> ..." se
+     * extraen la IP y la interfaz: la sección abre con la
+     * línea explícita "Gateway: <ip> · dev <iface>", para
+     * que el gateway quede localizable de un vistazo.
+     */
 
-    append_section(
-        "GATEWAY PRINCIPAL"
-    );
+    std::istringstream stream(output);
 
-    std::string gateway =
-        get_command_output(
-            "ip route | "
-            "awk '$1 == \"default\" {print $3, $5}' | "
-            "head -n 1"
-        );
+    std::string token;
+    std::string previous;
+    std::string gateway_ip;
+    std::string gateway_dev;
 
-    if (gateway.empty())
+    while (stream >> token)
+    {
+        if (previous == "via" && gateway_ip.empty())
+            gateway_ip = token;
+
+        if (previous == "dev" && gateway_dev.empty())
+            gateway_dev = token;
+
+        previous = token;
+    }
+
+    if (gateway_ip.empty())
     {
         append_log(
             "[ERROR] No se pudo detectar el gateway."
@@ -4379,35 +4213,9 @@ void SambaControlCenterPanel::show_gateway()
     }
 
     append_log(
-        "Gateway principal:"
+        "Gateway: " + gateway_ip +
+        " · dev " + gateway_dev
     );
-
-    append_log(gateway);
-
-    /*
-     * Extraemos solamente la primera dirección del gateway.
-     */
-    std::string gateway_ip =
-        get_command_output(
-            "ip route | "
-            "awk '$1 == \"default\" {print $3}' | "
-            "head -n 1"
-        );
-
-    if (gateway_ip.empty())
-    {
-        append_log(
-            "[ERROR] No se pudo obtener la IP del gateway."
-        );
-
-        set_status(
-            network_status,
-            "GATEWAY ERROR",
-            false
-        );
-
-        return;
-    }
 
     append_log("");
 
@@ -4415,7 +4223,7 @@ void SambaControlCenterPanel::show_gateway()
         "Prueba de conectividad con gateway:"
     );
 
-    std::string ping =
+    const std::string ping =
         get_command_output(
             "ping -c 2 -W 2 " + gateway_ip
         );
@@ -5011,7 +4819,7 @@ void SambaControlCenterPanel::full_diagnostic()
 
     append_log(
         "Carpeta compartida: " +
-        shared_folder
+        announced_share_folder(shared_folder)
     );
 
     append_log(
@@ -5108,13 +4916,11 @@ void SambaControlCenterPanel::full_diagnostic()
 
     show_routing();
 
+    show_gateway();
+
     ping_windows();
 
     test_smb_port();
-
-    append_section(
-        "CONFIGURACIÓN SMB"
-    );
 
     validate_samba_config();
 
@@ -5162,52 +4968,6 @@ void SambaControlCenterPanel::full_diagnostic()
                 "[FALTA] Usuario Samba no existe."
             );
         }
-    }
-
-    append_section(
-        "PROCESOS SAMBA"
-    );
-
-    append_log(
-        get_command_output(
-            "ps aux | grep '[s]mbd'"
-        )
-    );
-
-    append_section(
-        "SOCKETS SAMBA"
-    );
-
-    append_log(
-        get_command_output(
-            "ss -lntup | "
-            "grep -E ':(139|445)\\b'"
-        )
-    );
-
-    append_section(
-        "CONFIGURACIÓN ACTUAL"
-    );
-
-    if (fs::exists(
-            samba_config))
-    {
-        append_log(
-            samba_config
-        );
-
-        append_log(
-            get_command_output(
-                "testparm -s 2>/dev/null"
-            )
-        );
-    }
-    else
-    {
-        append_log(
-            "[ERROR] No existe " +
-            samba_config
-        );
     }
 
     append_section(
