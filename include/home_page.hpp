@@ -14,6 +14,12 @@ public:
     // CONTROL, a través de ControlPage).
     sigc::signal<void()> signal_reset_requested;
 
+    // El botón BOOT arranca los servicios y emite esta
+    // señal: MainWindow la conecta con las acciones
+    // del panel de CONTROL que levantan el resto del
+    // sistema (interfaces, puertos y firewall UFW).
+    sigc::signal<void()> signal_boot_extras_requested;
+
 private:
     SharedStatus& shared_status_;
 

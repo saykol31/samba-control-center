@@ -31,6 +31,17 @@ public:
     // el RESET y el PICK cruzan entre páginas.
     bool folder_exists();
 
+    // Acciones del BOOT de HOME: el botón de encendido
+    // levanta el sistema entero, así que además de
+    // arrancar los servicios corre estas tres acciones
+    // del panel — las mismas que ejecutan los botones
+    // INTERFACES, PORTS 139/445 y UFW FIREWALL de
+    // CONTROL — invocadas a través de ControlPage y
+    // MainWindow, como el RESET y el PICK.
+    bool configure_firewall();
+    void check_ports();
+    void show_interfaces();
+
 private:
     Gtk::Window* parent_window = nullptr;
    SharedStatus& shared_status_;
@@ -235,8 +246,6 @@ private:
      * ------------------------------------------------------------
      */
 
-    bool configure_firewall();
-
     void apply_firewall_output(
         bool ok,
         const std::string& output
@@ -248,9 +257,6 @@ private:
      * ------------------------------------------------------------
      */
 
-    void check_ports();
-
-    void show_interfaces();
     void show_routes();
     void show_gateway();
 

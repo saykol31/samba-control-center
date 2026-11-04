@@ -34,6 +34,18 @@ MainWindow::MainWindow() {
         )
     );
 
+    // El BOOT de HOME levanta el sistema entero: tras
+    // arrancar smbd y nmbd, el panel de CONTROL corre
+    // INTERFACES, PORTS 139/445 y UFW FIREWALL — las
+    // acciones de sus propios botones, sin duplicar
+    // implementaciones.
+    home_page->signal_boot_extras_requested.connect(
+        sigc::mem_fun(
+            *control_page,
+            &ControlPage::boot_extras
+        )
+    );
+
     // El REFRESH de FILE también refresca el
     // veredicto de carpeta que muestra HOME (vía el
     // panel de CONTROL): la carpeta de FILE y la de

@@ -2796,7 +2796,7 @@ bool SambaControlCenterPanel::folder_exists()
     if (!shares.empty())
     {
         folder_title.set_text(
-            "Carpeta " + shares.front().name
+            "Shared Folder " + shares.front().name
         );
     }
     else
@@ -2806,12 +2806,12 @@ bool SambaControlCenterPanel::folder_exists()
         if (first_configured_share(first_configured))
         {
             folder_title.set_text(
-                "Carpeta " + first_configured.name
+                "Shared Folder " + first_configured.name
             );
         }
         else
         {
-            folder_title.set_text("Carpeta Red");
+            folder_title.set_text("Shared Folder");
         }
     }
 

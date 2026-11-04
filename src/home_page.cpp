@@ -13,7 +13,7 @@ namespace fs = std::filesystem;
  * PANEL HOME — BOTONES DE ENERGÍA
  * ================================================================
  *
- * Boot     ⏻ verde   (U+23FB)  arranca  smbd y nmbd
+ * Boot     ⏻ verde   (U+23FB)  arranca  smbd y nmbd y levanta el sistema entero
  * Reset    ⟳ azul    (U+27F3)  reinicia smbd y nmbd
  * Shutdown ⏻ rojo    (U+23FB)  detiene  smbd y nmbd
  *
@@ -28,6 +28,14 @@ namespace fs = std::filesystem;
  * Reset NO tiene implementación propia: emite una señal
  * que MainWindow conecta con restart_services() del panel
  * de CONTROL — la única implementación del reinicio.
+ *
+ * Boot tampoco termina en los servicios: tras arrancarlos
+ * emite signal_boot_extras_requested, y MainWindow hace
+ * que el panel de CONTROL corra INTERFACES, PORTS 139/445
+ * y UFW FIREWALL — las acciones de sus propios botones.
+ * Sin eso el veredicto global de HOME no podía pasar a
+ * ACTIVE tras un encendido (red sin confirmar y puertos
+ * sin revisar con los servicios ya en marcha).
  *
  * ================================================================
  */
@@ -297,6 +305,11 @@ HomePage::HomePage(SharedStatus& shared_status)
 void HomePage::on_boot()
 {
     run_service_action("start");
+
+    // Con los servicios ya en marcha, el panel de
+    // CONTROL levanta el resto del sistema (interfaces,
+    // puertos y firewall): un solo BOOT, sistema activo.
+    signal_boot_extras_requested.emit();
 }
 
 

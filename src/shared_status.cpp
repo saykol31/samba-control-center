@@ -84,7 +84,7 @@ SharedStatus::SharedStatus()
     heading->append(*title);
 
     auto* subtitle = Gtk::make_managed<Gtk::Label>(
-        "Panel de estado · Debian y distribuciones compatibles");
+        "Status panel. Debian and compatible distributions");
     subtitle->set_halign(Gtk::Align::START);
     subtitle->add_css_class("scc-dashboard-subtitle");
     heading->append(*subtitle);
@@ -138,15 +138,15 @@ SharedStatus::SharedStatus()
     system_card->append(*system_title);
 
     add_row(*network_card, "Samba", samba_status_, 0);
-    folder_title_.set_text("Carpeta Red");
+    folder_title_.set_text("Shared Folder");
     add_row(*network_card, folder_title_, folder_status_, 1);
-    add_row(*network_card, "Puertos 139/445", ports_status_, 2);
-    add_row(*network_card, "Red / interfaces", network_status_, 3);
+    add_row(*network_card, "Ports 139/445", ports_status_, 2);
+    add_row(*network_card, "Network / Interfaces", network_status_, 3);
 
-    add_row(*system_card, "Servicio smbd", smbd_status_, 0);
-    add_row(*system_card, "Servicio nmbd", nmbd_status_, 1);
-    add_row(*system_card, "Cortafuegos UFW", firewall_status_, 2);
-    add_row(*system_card, "Herramienta tcpdump", tcpdump_status_, 3);
+    add_row(*system_card, "smbd Service", smbd_status_, 0);
+    add_row(*system_card, "nmbd Service", nmbd_status_, 1);
+    add_row(*system_card, "UFW firewall", firewall_status_, 2);
+    add_row(*system_card, "TCPDUMP Tool", tcpdump_status_, 3);
 
     columns->append(*network_card);
     columns->append(*system_card);

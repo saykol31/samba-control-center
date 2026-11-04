@@ -24,6 +24,13 @@ public:
     // esperar a un reinicio de la app.
     void refresh_folder_status();
 
+    // Puente a las tres acciones que completan el
+    // BOOT de HOME (interfaces, puertos y firewall
+    // del panel heredado): las acciona el botón BOOT
+    // tras arrancar los servicios, para levantar el
+    // sistema entero de un solo encendido.
+    void boot_extras();
+
 private:
     SambaControlCenterPanel* controller_ = nullptr;
 };

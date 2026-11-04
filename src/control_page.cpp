@@ -39,3 +39,19 @@ void ControlPage::pick_windows_ip()
 
     controller_->pick_windows_ip();
 }
+
+
+void ControlPage::boot_extras()
+{
+    if (controller_ == nullptr)
+        return;
+
+    // Las mismas acciones que sus botones en CONTROL,
+    // en este orden: primero las dos lecturas que el
+    // veredicto de HOME necesita (red confirmada y
+    // puertos en escucha tras el arranque) y al final
+    // el firewall, que corre en segundo plano.
+    controller_->show_interfaces();
+    controller_->check_ports();
+    controller_->configure_firewall();
+}

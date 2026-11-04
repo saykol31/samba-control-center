@@ -240,6 +240,7 @@ SettingsPage::dependency_table()
         {"Ping",                "ping",       "iputils-ping",     true},
         {"TCP check",           "nc",         "netcat-openbsd",   true},
         {"Process tools",       "pgrep",      "procps",           true},
+        {"Admin authorization", "pkexec",     "pkexec",           true},
         {"Network scan",        "nmap",       "nmap",             false},
         {"CIFS mount",          "mount.cifs", "cifs-utils",       false},
         {"GVfs",                "gio",        "gvfs",             false},
@@ -392,6 +393,21 @@ SettingsPage::SettingsPage()
     deps_scrolled->set_min_content_height(170);
     deps_view_.set_editable(false);
     deps_view_.set_monospace(true);
+
+    // Los marcadores de la lista se pintan con etiquetas
+    // del búfer, con la misma paleta que el log de CONTROL:
+    // [OK] verde, [FALTA] naranja, en negrita. Sin esto la
+    // lista salía en texto plano (detectado el 2026-11-03).
+    {
+        auto dep_buffer = deps_view_.get_buffer();
+        auto tag_ok = dep_buffer->create_tag("dep_ok");
+        tag_ok->property_foreground().set_value("green");
+        tag_ok->property_weight().set_value(700);
+        auto tag_falta = dep_buffer->create_tag("dep_falta");
+        tag_falta->property_foreground().set_value("orange");
+        tag_falta->property_weight().set_value(700);
+    }
+
     deps_scrolled->set_child(deps_view_);
     content->append(*deps_scrolled);
 
@@ -535,32 +551,39 @@ SettingsPage::missing_dependencies() const
 
 void SettingsPage::refresh_dependencies()
 {
-    std::string text;
     int satisfied = 0;
     const auto& table = dependency_table();
 
+    auto buffer = deps_view_.get_buffer();
+    buffer->set_text("");
+
+    auto tag_ok = buffer->get_tag_table()->lookup("dep_ok");
+    auto tag_falta = buffer->get_tag_table()->lookup("dep_falta");
+
     for (const auto& dep : table)
     {
-        if (dependency_present(dep))
-        {
+        const bool present = dependency_present(dep);
+
+        if (present)
             ++satisfied;
-            text += "[OK] ";
-        }
+
+        // El marcador se inserta con su etiqueta de color;
+        // el resto de la línea va en texto plano.
+        if (present)
+            buffer->insert_with_tag(buffer->end(), "[OK] ", tag_ok);
         else
-        {
-            text += "[FALTA] ";
-        }
+            buffer->insert_with_tag(buffer->end(), "[FALTA] ", tag_falta);
 
-        text += dep.command;
-        text += " — ";
-        text += dep.label;
-        text += " (package: ";
-        text += dep.package;
-        text += dep.required ? ")" : ", optional)";
-        text += "\n";
+        std::string line = dep.command;
+        line += " — ";
+        line += dep.label;
+        line += " (package: ";
+        line += dep.package;
+        line += dep.required ? ")" : ", optional)";
+        line += "\n";
+
+        buffer->insert(buffer->end(), line);
     }
-
-    deps_view_.get_buffer()->set_text(text);
 
     const auto total =
         static_cast<int>(table.size());
