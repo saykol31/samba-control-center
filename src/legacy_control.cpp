@@ -224,6 +224,93 @@ static std::string service_command(
 }
 
 
+/*
+ * Estado de un servicio en forma corta. La página de
+ * `systemctl status` es casi toda ceremonia (árbol
+ * CGroup, líneas de journal, procesos hijos): aquí se
+ * piden solo las propiedades que dicen algo y se
+ * presentan en tres líneas. En SysVinit/OpenRC la
+ * salida de `service` ya es breve y se deja tal cual.
+ */
+static std::string service_status_text(
+    const std::string& service,
+    int* rc)
+{
+    std::string init;
+    std::ifstream init_file("/proc/1/comm");
+
+    if (init_file)
+        std::getline(init_file, init);
+
+    init = trim(init);
+
+    if (init == "systemd" && command_exists("systemctl"))
+    {
+        const std::string raw =
+            execute_command(
+                "systemctl show " +
+                shell_escape(service) +
+                " -p ActiveState,SubState,MainPID,"
+                "ActiveEnterTimestamp",
+                rc
+            );
+
+        std::string state;
+        std::string sub;
+        std::string pid;
+        std::string since;
+
+        std::istringstream stream(raw);
+        std::string line;
+
+        while (std::getline(stream, line))
+        {
+            const auto eq = line.find('=');
+
+            if (eq == std::string::npos)
+                continue;
+
+            const std::string key =
+                line.substr(0, eq);
+
+            const std::string value =
+                line.substr(eq + 1);
+
+            if (key == "ActiveState")
+                state = value;
+            else if (key == "SubState")
+                sub = value;
+            else if (key == "MainPID")
+                pid = value;
+            else if (key == "ActiveEnterTimestamp")
+                since = value;
+        }
+
+        if (!state.empty())
+        {
+            std::string text =
+                "Estado: " + state;
+
+            if (!sub.empty())
+                text += " (" + sub + ")";
+
+            if (!pid.empty() && pid != "0")
+                text += "\nPID principal: " + pid;
+
+            if (!since.empty())
+                text += "\nActivo desde: " + since;
+
+            return text;
+        }
+    }
+
+    return execute_command(
+        service_command(service, "status"),
+        rc
+    );
+}
+
+
 static std::string get_command_output(
     const std::string& command)
 {
@@ -850,6 +937,7 @@ void SambaControlCenterPanel::setup_ui()
      * Colores de los marcadores del log (misma paleta
      * que las lámparas de estado):
      * [OK] verde, [ERROR] rojo, [FALTA] naranja.
+     * Cabeceras de sección: azul.
      */
 
     auto tag_ok =
@@ -888,6 +976,19 @@ void SambaControlCenterPanel::setup_ui()
     );
 
     tag_falta->property_weight().set_value(
+        700
+    );
+
+    auto tag_section =
+        log_buffer->create_tag(
+            "log_section"
+        );
+
+    tag_section->property_foreground().set_value(
+        "blue"
+    );
+
+    tag_section->property_weight().set_value(
         700
     );
 
@@ -1278,6 +1379,17 @@ void SambaControlCenterPanel::append_section(
 {
     append_log("");
 
+    if (!log_buffer)
+        return;
+
+    // La cabecera se pinta de azul (etiqueta
+    // log_section): la estructura va en color y la
+    // evidencia queda en texto plano.
+    auto start_mark =
+        log_buffer->create_mark(
+            log_buffer->end()
+        );
+
     append_log(
         "============================================================"
     );
@@ -1288,6 +1400,16 @@ void SambaControlCenterPanel::append_section(
 
     append_log(
         "============================================================"
+    );
+
+    log_buffer->apply_tag_by_name(
+        "log_section",
+        start_mark->get_iter(),
+        log_buffer->end()
+    );
+
+    log_buffer->delete_mark(
+        start_mark
     );
 }
 
@@ -3348,10 +3470,7 @@ void SambaControlCenterPanel::check_services()
     int rc1 = -1;
 
     const std::string smbd =
-        execute_command(
-            service_command("smbd", "status"),
-            &rc1
-        );
+        service_status_text("smbd", &rc1);
 
     append_log(
         "---- smbd ----"
@@ -3384,10 +3503,7 @@ void SambaControlCenterPanel::check_services()
         int rc2 = -1;
 
         const std::string nmbd =
-            execute_command(
-                service_command("nmbd", "status"),
-                &rc2
-            );
+            service_status_text("nmbd", &rc2);
 
         append_log(
             "---- nmbd ----"
@@ -4828,6 +4944,92 @@ void SambaControlCenterPanel::full_diagnostic()
     );
 
     /*
+     * RESUMEN primero, evidencia después: el diagnóstico
+     * anota el veredicto de cada chequeo según sale y al
+     * final inserta el bloque RESUMEN en esta marca —
+     * justo tras el preámbulo, antes de la primera
+     * sección. El veredicto de una sección es su ÚLTIMA
+     * línea con marcador ([OK]/[ERROR]/[FALTA]); cuando
+     * una sección no deja marcador, se lee su etiqueta
+     * de estado, que dice lo mismo.
+     */
+    auto resumen_mark =
+        log_buffer->create_mark(
+            log_buffer->end()
+        );
+
+    std::vector<std::string> resumen;
+
+    auto log_offset = [this]() {
+        return log_buffer->get_char_count();
+    };
+
+    auto span_verdict = [this](int from) {
+        const std::string text =
+            log_buffer->get_text(
+                log_buffer->get_iter_at_offset(from),
+                log_buffer->end()
+            );
+
+        std::string last;
+        std::istringstream stream(text);
+        std::string line;
+
+        while (std::getline(stream, line))
+        {
+            if (line.rfind("[OK]", 0) == 0 ||
+                line.rfind("[ERROR]", 0) == 0 ||
+                line.rfind("[FALTA]", 0) == 0)
+                last = line;
+        }
+
+        return last;
+    };
+
+    auto note = [&resumen](
+                    const std::string& name,
+                    const std::string& verdict) {
+        if (verdict.empty())
+            return;
+
+        // "[OK] Resto" -> "[OK] Nombre — Resto"
+        const auto pos =
+            verdict.find(' ');
+
+        resumen.push_back(
+            verdict.substr(0, pos) + " " + name +
+            " — " + verdict.substr(pos + 1)
+        );
+    };
+
+    auto label_verdict = [](
+                             Gtk::Label& label,
+                             const std::string& name) {
+        std::string text =
+            label.get_text();
+
+        std::string marker = "[INFO]";
+
+        if (text.rfind("✓ ", 0) == 0)
+        {
+            marker = "[OK]";
+            text.erase(0, 4);
+        }
+        else if (text.rfind("✗ ", 0) == 0)
+        {
+            marker = "[ERROR]";
+            text.erase(0, 4);
+        }
+        else if (text.rfind("⚠ ", 0) == 0)
+        {
+            marker = "[FALTA]";
+            text.erase(0, 4);
+        }
+
+        return marker + " " + name + " — " + text;
+    };
+
+    /*
      * Autorización única del diagnóstico: las dos consultas con
      * root (ufw status y pdbedit -L) corren en UN solo pkexec.
      * Son lecturas independientes: batch_step_always no detiene
@@ -4870,17 +5072,106 @@ void SambaControlCenterPanel::full_diagnostic()
         );
     }
 
-    check_dependencies();
+    {
+        const int from = log_offset();
 
-    check_samba();
+        check_dependencies();
 
-    folder_exists();
+        // La sección de dependencias no tiene un
+        // único veredicto: su resumen es el conteo.
+        const std::string span =
+            log_buffer->get_text(
+                log_buffer->get_iter_at_offset(from),
+                log_buffer->end()
+            );
+
+        int ok_count = 0;
+        int falta_count = 0;
+
+        std::istringstream stream(span);
+        std::string line;
+
+        while (std::getline(stream, line))
+        {
+            if (line.rfind("[OK]", 0) == 0)
+                ++ok_count;
+            else if (line.rfind("[FALTA]", 0) == 0)
+                ++falta_count;
+        }
+
+        if (falta_count == 0)
+        {
+            resumen.push_back(
+                "[OK] Dependencias — " +
+                std::to_string(ok_count) +
+                " de " + std::to_string(ok_count) +
+                " presentes"
+            );
+        }
+        else
+        {
+            resumen.push_back(
+                "[FALTA] Dependencias — faltan " +
+                std::to_string(falta_count) +
+                " de " +
+                std::to_string(ok_count + falta_count)
+            );
+        }
+    }
+
+    {
+        const int from = log_offset();
+
+        check_samba();
+
+        const std::string verdict =
+            span_verdict(from);
+
+        if (!verdict.empty())
+            note("Samba", verdict);
+        else
+            resumen.push_back(
+                label_verdict(samba_status, "Samba")
+            );
+    }
+
+    {
+        const int from = log_offset();
+
+        folder_exists();
+
+        const std::string verdict =
+            span_verdict(from);
+
+        if (!verdict.empty())
+            note("Carpeta compartida", verdict);
+        else
+            resumen.push_back(
+                label_verdict(
+                    folder_status,
+                    "Carpeta compartida"
+                )
+            );
+    }
 
     check_services();
+
+    resumen.push_back(
+        label_verdict(smbd_status, "Servicio smbd")
+    );
+
+    if (command_exists("nmbd"))
+    {
+        resumen.push_back(
+            label_verdict(nmbd_status, "Servicio nmbd")
+        );
+    }
 
     /*
      * ESTADO UFW: consume el segmento "ufw" del lote.
      */
+
+    const int ufw_from = log_offset();
 
     append_section(
         "ESTADO UFW"
@@ -4912,17 +5203,92 @@ void SambaControlCenterPanel::full_diagnostic()
         );
     }
 
-    check_ports();
+    {
+        const std::string verdict =
+            span_verdict(ufw_from);
 
-    show_routing();
+        if (!verdict.empty())
+            note("UFW", verdict);
+        else
+            resumen.push_back(
+                label_verdict(firewall_status, "UFW")
+            );
+    }
 
-    show_gateway();
+    {
+        const int from = log_offset();
 
-    ping_windows();
+        check_ports();
 
-    test_smb_port();
+        const std::string verdict =
+            span_verdict(from);
 
-    validate_samba_config();
+        if (!verdict.empty())
+            note("Puertos 139/445", verdict);
+        else
+            resumen.push_back(
+                label_verdict(
+                    ports_status,
+                    "Puertos 139/445"
+                )
+            );
+    }
+
+    {
+        const int from = log_offset();
+
+        show_routing();
+
+        const std::string verdict =
+            span_verdict(from);
+
+        if (!verdict.empty())
+            note("Red y rutas", verdict);
+        else
+            resumen.push_back(
+                label_verdict(
+                    network_status,
+                    "Red y rutas"
+                )
+            );
+    }
+
+    {
+        const int from = log_offset();
+
+        show_gateway();
+
+        note("Gateway", span_verdict(from));
+    }
+
+    {
+        const int from = log_offset();
+
+        ping_windows();
+
+        note("Ping Windows", span_verdict(from));
+    }
+
+    {
+        const int from = log_offset();
+
+        test_smb_port();
+
+        note("TCP 445 Windows", span_verdict(from));
+    }
+
+    {
+        const int from = log_offset();
+
+        validate_samba_config();
+
+        note(
+            "Configuración Samba",
+            span_verdict(from)
+        );
+    }
+
+    const int usuario_from = log_offset();
 
     append_section(
         "USUARIO SAMBA"
@@ -4968,6 +5334,115 @@ void SambaControlCenterPanel::full_diagnostic()
                 "[FALTA] Usuario Samba no existe."
             );
         }
+    }
+
+    note(
+        "Usuario Samba",
+        span_verdict(usuario_from)
+    );
+
+    /*
+     * El RESUMEN se inserta en la marca guardada tras
+     * el preámbulo: aunque se compone al final, cuando
+     * todos los veredictos existen, se lee el primero.
+     * La cabecera se pinta de azul como las demás
+     * secciones y cada veredicto con su marcador.
+     */
+    {
+        std::string block =
+            "\n"
+            "============================================================\n"
+            " RESUMEN\n"
+            "============================================================\n";
+
+        for (const auto& line : resumen)
+            block += line + "\n";
+
+        auto pos =
+            resumen_mark->get_iter();
+
+        auto block_start =
+            log_buffer->create_mark(pos);
+
+        log_buffer->insert(pos, block);
+
+        auto begin =
+            block_start->get_iter();
+
+        const auto end =
+            log_buffer->get_iter_at_offset(
+                begin.get_offset() +
+                static_cast<int>(
+                    Glib::ustring(block).length()
+                )
+            );
+
+        auto banner_begin = begin;
+        banner_begin.forward_line();
+
+        auto banner_end = banner_begin;
+        banner_end.forward_lines(3);
+
+        log_buffer->apply_tag_by_name(
+            "log_section",
+            banner_begin,
+            banner_end
+        );
+
+        auto line_iter = banner_end;
+
+        while (line_iter.get_offset() < end.get_offset())
+        {
+            auto line_end = line_iter;
+            line_end.forward_to_line_end();
+
+            const std::string line =
+                log_buffer->get_text(
+                    line_iter,
+                    line_end
+                );
+
+            std::string tag;
+            int marker_chars = 0;
+
+            if (line.rfind("[OK]", 0) == 0)
+            {
+                tag = "log_ok";
+                marker_chars = 4;
+            }
+            else if (line.rfind("[ERROR]", 0) == 0)
+            {
+                tag = "log_error";
+                marker_chars = 7;
+            }
+            else if (line.rfind("[FALTA]", 0) == 0)
+            {
+                tag = "log_falta";
+                marker_chars = 7;
+            }
+
+            if (!tag.empty())
+            {
+                auto marker_end = line_iter;
+                marker_end.forward_chars(
+                    marker_chars
+                );
+
+                log_buffer->apply_tag_by_name(
+                    tag,
+                    line_iter,
+                    marker_end
+                );
+            }
+
+            if (!line_end.forward_line())
+                break;
+
+            line_iter = line_end;
+        }
+
+        log_buffer->delete_mark(block_start);
+        log_buffer->delete_mark(resumen_mark);
     }
 
     append_section(

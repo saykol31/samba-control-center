@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -454,6 +455,46 @@ UserPage::UserPage()
     log_scrolled->set_min_content_height(100);
     log_view_.set_editable(false);
     log_view_.set_monospace(true);
+
+    // Colores del log compartido: los marcadores de
+    // veredicto con la paleta del log de CONTROL
+    // ([OK] verde, [ERROR] rojo, [FALTA] naranja, en
+    // negrita) y las palabras SERVER en violeta y
+    // CLIENT en cian, para distinguir de un vistazo
+    // de qué lado viene cada línea. Las etiquetas de
+    // marcador se crean DESPUÉS de las de palabra: en
+    // caso de solape manda la creada más tarde, y el
+    // marcador no debe perder nunca.
+    {
+        auto log_buffer = log_view_.get_buffer();
+
+        auto tag_server =
+            log_buffer->create_tag("word_server");
+        tag_server->property_foreground().set_value(
+            "#7C3AED");
+
+        auto tag_client =
+            log_buffer->create_tag("word_client");
+        tag_client->property_foreground().set_value(
+            "#0891B2");
+
+        auto tag_ok =
+            log_buffer->create_tag("log_ok");
+        tag_ok->property_foreground().set_value("green");
+        tag_ok->property_weight().set_value(700);
+
+        auto tag_error =
+            log_buffer->create_tag("log_error");
+        tag_error->property_foreground().set_value("red");
+        tag_error->property_weight().set_value(700);
+
+        auto tag_falta =
+            log_buffer->create_tag("log_falta");
+        tag_falta->property_foreground().set_value(
+            "orange");
+        tag_falta->property_weight().set_value(700);
+    }
+
     log_scrolled->set_child(log_view_);
     append(*log_scrolled);
 
@@ -525,7 +566,108 @@ UserPage::UserPage()
 void UserPage::log_line(const std::string& text)
 {
     auto buffer = log_view_.get_buffer();
+
+    auto start_mark =
+        buffer->create_mark(buffer->end());
+
     buffer->insert(buffer->end(), text + "\n");
+
+    auto begin = start_mark->get_iter();
+
+    const Glib::ustring line = text;
+
+    auto paint = [&](int char_pos, int char_len,
+                     const char* tag_name) {
+        auto from = begin;
+        from.forward_chars(char_pos);
+
+        auto to = from;
+        to.forward_chars(char_len);
+
+        buffer->apply_tag_by_name(tag_name, from, to);
+    };
+
+    // El marcador de veredicto, donde esté en la
+    // línea (las de USER lo llevan tras el [SERVER] /
+    // [CLIENT] inicial): la paleta del log de CONTROL.
+    const std::pair<const char*, const char*> markers[] = {
+        {"[OK]", "log_ok"},
+        {"[ERROR]", "log_error"},
+        {"[FALTA]", "log_falta"},
+    };
+
+    for (const auto& marker : markers)
+    {
+        const auto pos = line.find(marker.first);
+
+        if (pos != Glib::ustring::npos)
+        {
+            paint(
+                static_cast<int>(pos),
+                static_cast<int>(
+                    Glib::ustring(marker.first).length()),
+                marker.second);
+            break;
+        }
+    }
+
+    // SERVER y CLIENT como palabra completa, en
+    // cualquier capitalización: violeta y cian.
+    auto paint_word = [&](const char* word,
+                          const char* tag_name) {
+        const Glib::ustring needle = word;
+        const auto word_len =
+            static_cast<int>(needle.length());
+
+        auto is_word_char = [](gunichar c) {
+            return (c >= 'a' && c <= 'z') ||
+                   (c >= 'A' && c <= 'Z') ||
+                   (c >= '0' && c <= '9') ||
+                   c == '_';
+        };
+
+        for (Glib::ustring::size_type i = 0;
+             i + static_cast<std::size_t>(word_len) <=
+                 line.length();
+             ++i)
+        {
+            bool match = true;
+
+            for (int j = 0; j < word_len; ++j)
+            {
+                if (std::tolower(
+                        static_cast<unsigned char>(
+                            line[i + j])) !=
+                    std::tolower(
+                        static_cast<unsigned char>(
+                            needle[j])))
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (!match)
+                continue;
+
+            if (i > 0 && is_word_char(line[i - 1]))
+                continue;
+
+            const auto after =
+                i + static_cast<std::size_t>(word_len);
+
+            if (after < line.length() &&
+                is_word_char(line[after]))
+                continue;
+
+            paint(static_cast<int>(i), word_len, tag_name);
+        }
+    };
+
+    paint_word("server", "word_server");
+    paint_word("client", "word_client");
+
+    buffer->delete_mark(start_mark);
 
     auto end = buffer->end();
     log_view_.scroll_to(end, 0.0, 0.0, 1.0);
@@ -766,17 +908,52 @@ void UserPage::on_add_user()
 
 void UserPage::on_set_password()
 {
-    const std::string user = selected_user();
+    std::string user = selected_user();
+
+    // Sin selección, manda el nombre escrito en el
+    // campo de usuario nuevo: el botón 🔑 cubre los
+    // dos trabajos, como el PASSWORD SAMBA de CONTROL.
+    if (user.empty())
+        user = trim(new_user_entry_.get_text().raw());
 
     if (user.empty())
     {
         log_line(
             "[SERVER] Select a Samba user from the list "
-            "first (REFRESH if it is empty).");
+            "or type the Linux user name "
+            "(REFRESH if the list is empty).");
         return;
     }
 
-    ask_password(user, false);
+    const bool exists =
+        std::find(
+            user_names_.begin(),
+            user_names_.end(),
+            user) != user_names_.end();
+
+    if (exists)
+    {
+        ask_password(user, false);
+        return;
+    }
+
+    // Aún no es usuario Samba: la lógica vieja del
+    // panel (smbpasswd -a) lo crea en el mismo gesto,
+    // pero antes el usuario Linux debe existir — la
+    // cuenta Samba cuelga de él.
+    int rc = -1;
+    execute_command("id " + shell_escape(user), &rc);
+
+    if (rc != 0)
+    {
+        log_line(
+            "[SERVER] [ERROR] Linux user '" + user +
+            "' does not exist. Create the system user "
+            "first (the Samba account hangs from it).");
+        return;
+    }
+
+    ask_password(user, true);
 }
 
 
