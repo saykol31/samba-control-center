@@ -1251,11 +1251,26 @@ void UserPage::on_connect()
 
     if (!password.empty())
     {
-        // gio pregunta la contraseña por su entrada
-        // estándar cuando el recurso la exige.
+        // gio pregunta por su entrada estándar, en
+        // rondas: contraseña, dominio (vacío = el que
+        // ofrece por defecto) y contraseña otra vez.
+        // Hay que responder a TODAS sus preguntas, y
+        // dosificando: si las respuestas llegan todas
+        // de golpe por el tubo, una lectura de gio
+        // puede tragarse el tubo entero y dejar las
+        // siguientes quedan sin respuesta (montando a
+        // mano, tecleando al ritmo de las preguntas,
+        // sí funciona — verificado en campo contra un
+        // Windows real, 2026-11-01).
+        const std::string answer =
+            shell_escape(password);
         command =
-            "printf '%s\\n' " + shell_escape(password) +
-            " | gio mount " + shell_escape(uri);
+            "{ printf '%s\\n' " + answer +
+            "; sleep 1; printf '\\n'; sleep 1; "
+            "printf '%s\\n' " + answer +
+            "; sleep 1; printf '\\n'; sleep 1; "
+            "printf '%s\\n' " + answer +
+            "; } | gio mount " + shell_escape(uri);
     }
     else
     {
@@ -1268,8 +1283,16 @@ void UserPage::on_connect()
     if (!trim(output).empty())
         log_line(trim(output));
 
+    // "Location is already mounted" no es un fallo:
+    // el recurso ya estaba conectado (montado a mano,
+    // por ejemplo) y queda igual de usable.
+    const bool connected =
+        rc == 0 ||
+        output.find("already mounted") !=
+            std::string::npos;
+
     log_line(
-        rc == 0
+        connected
             ? "[CLIENT] [OK] Connected: " + uri +
                   " — press OPEN to browse it."
             : "[CLIENT] [ERROR] Could not connect to " +
