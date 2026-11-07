@@ -1412,45 +1412,147 @@ void UserPage::on_connect()
         return;
     }
 
-    if (!command_exists("gio"))
+    if (client_mounting_)
     {
         log_line(
-            "[CLIENT] [FALTA] gio is not installed "
-            "(package: gvfs) — SETTINGS > DEPENDENCIES "
-            "can install it.");
+            "[CLIENT] A connection is already in "
+            "progress — wait for it to finish.");
         return;
     }
 
+    const std::string user =
+        trim(client_user_entry_.get_text().raw());
     const std::string password =
         client_password_entry_.get_text().raw();
 
-    std::string command;
+    // Montaje desde el propio proceso, con la API de
+    // GIO: el backend GVfs (el mismo que monta bien a
+    // mano) pide las credenciales a esta operación, y
+    // la operación las responde desde el código, con
+    // lo tecleado en el formulario. Sin shell, sin
+    // tubo y sin preguntas por la entrada estándar:
+    // esa entrega quedó condenada en campo el
+    // 2026-11-06 (tubo a 1 s, a 3 s y con
+    // pseudo-terminal — tres fallos idénticos; lo
+    // entregado antes de que gio pregunte se pierde;
+    // tecleado a mano, monta).
+    auto operation = Gio::MountOperation::create();
+
+    if (!user.empty())
+        operation->set_username(user);
 
     if (!password.empty())
+        operation->set_password(password);
+
+    operation->signal_ask_password().connect(
+        sigc::mem_fun(
+            *this, &UserPage::on_connect_ask_password));
+
+    client_mount_op_ = operation;
+    client_mount_file_ = Gio::File::create_for_uri(uri);
+    client_mount_uri_ = uri;
+    client_mount_password_ = password;
+    client_mounting_ = true;
+
+    log_line("[CLIENT] Connecting to " + uri + " ...");
+
+    client_mount_file_->mount_enclosing_volume(
+        operation,
+        sigc::mem_fun(
+            *this, &UserPage::on_connect_finished));
+}
+
+
+void UserPage::on_connect_ask_password(
+    const Glib::ustring& /*message*/,
+    const Glib::ustring& /*default_user*/,
+    const Glib::ustring& /*default_domain*/,
+    Gio::AskPasswordFlags /*flags*/)
+{
+    // El backend pide credenciales: se responde con
+    // la contraseña que el usuario tecleó en el
+    // formulario al conectar (guardada solo en
+    // memoria mientras dura el intento; jamás se
+    // guarda en disco). Sin contraseña no hay nada
+    // que responder: se aborta y el montaje falla
+    // limpio, sin quedarse esperando.
+    if (!client_mount_op_)
+        return;
+
+    if (client_mount_password_.empty())
     {
-        // gio pregunta la contraseña por su entrada
-        // estándar cuando el recurso la exige.
-        command =
-            "printf '%s\\n' " + shell_escape(password) +
-            " | gio mount " + shell_escape(uri);
+        log_line(
+            "[CLIENT] The server asked for a password, "
+            "but the password field is empty.");
+
+        client_mount_op_->reply(
+            Gio::MountOperationResult::ABORTED);
+        return;
     }
-    else
+
+    client_mount_op_->set_password(
+        client_mount_password_);
+
+    client_mount_op_->reply(
+        Gio::MountOperationResult::HANDLED);
+}
+
+
+void UserPage::on_connect_finished(
+    const Glib::RefPtr<Gio::AsyncResult>& result)
+{
+    const std::string uri = client_mount_uri_;
+
+    client_mounting_ = false;
+    client_mount_op_.reset();
+    client_mount_password_.clear();
+
+    try
     {
-        command = "gio mount " + shell_escape(uri);
+        client_mount_file_->mount_enclosing_volume_finish(
+            result);
+
+        client_mount_file_.reset();
+
+        log_line(
+            "[CLIENT] [OK] Connected: " + uri +
+            " — press OPEN to browse it.");
     }
+    catch (const Glib::Error& error)
+    {
+        client_mount_file_.reset();
 
-    int rc = -1;
-    const std::string output = execute_command(command, &rc);
+        const int code = error.code();
 
-    if (!trim(output).empty())
-        log_line(trim(output));
+        // "Already mounted" no es un fallo: el recurso
+        // ya estaba conectado (montado a mano, por
+        // ejemplo) y queda igual de usable.
+        if (code ==
+            static_cast<int>(
+                Gio::Error::Code::ALREADY_MOUNTED))
+        {
+            log_line(
+                "[CLIENT] [OK] Connected: " + uri +
+                " — press OPEN to browse it.");
+            return;
+        }
 
-    log_line(
-        rc == 0
-            ? "[CLIENT] [OK] Connected: " + uri +
-                  " — press OPEN to browse it."
-            : "[CLIENT] [ERROR] Could not connect to " +
-                  uri + ".");
+        if (code ==
+            static_cast<int>(
+                Gio::Error::Code::NOT_SUPPORTED))
+        {
+            log_line(
+                "[CLIENT] [FALTA] The SMB backend of "
+                "GVfs is not installed (package: gvfs) "
+                "— SETTINGS > DEPENDENCIES can "
+                "install it.");
+            return;
+        }
+
+        log_line(
+            "[CLIENT] [ERROR] Could not connect to " +
+            uri + ": " + error.what());
+    }
 }
 
 

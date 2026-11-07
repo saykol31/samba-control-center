@@ -19,7 +19,8 @@
  *
  * CLIENT — la mitad cliente tipo Smb4K: buscar servidores
  * con el mismo escaneo nmap de la casa, listar shares con
- * smbclient, montar con GVfs (gio mount, sin root), abrir
+ * smbclient, montar con GVfs desde el proceso
+ * (API de GIO, sin root), abrir
  * en el gestor de archivos y desmontar. Conexiones
  * guardadas en la config XDG: servidor + recurso +
  * usuario — la contraseña NUNCA se guarda; se pide al
@@ -75,6 +76,24 @@ private:
     void on_scan_finished();
     void on_list_shares();
     void on_connect();
+    void on_connect_ask_password(
+        const Glib::ustring& message,
+        const Glib::ustring& default_user,
+        const Glib::ustring& default_domain,
+        Gio::AskPasswordFlags flags);
+    void on_connect_finished(
+        const Glib::RefPtr<Gio::AsyncResult>& result);
+
+    // Montaje del CLIENTE en curso (API de GIO): la
+    // operación, el archivo y el contexto viven como
+    // miembros mientras el backend trabaja; el callback
+    // de fin los libera. La contraseña solo vive en
+    // memoria durante el intento — jamás se guarda.
+    Glib::RefPtr<Gio::MountOperation> client_mount_op_;
+    Glib::RefPtr<Gio::File> client_mount_file_;
+    std::string client_mount_uri_;
+    std::string client_mount_password_;
+    bool client_mounting_ = false;
     void on_open_share();
     void on_disconnect();
     void on_save_connection();
