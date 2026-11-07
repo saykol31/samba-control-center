@@ -93,7 +93,7 @@ y no se guardan.
 
 | Botón | Qué hace |
 |---|---|
-| 👏 **SAMBA** | Configura el servidor con los valores de SETTINGS y las carpetas de FILE: valida la configuración con `testparm` **antes** de instalarla, respalda el `smb.conf` actual, reinicia los servicios y abre el firewall. |
+| 👏 **SAMBA** | La preconfiguración automática en un clic: crea las carpetas compartidas que falten, deja creado el usuario Samba del usuario Linux actual, genera la configuración con los valores de SETTINGS y las carpetas de FILE, la valida con `testparm` **antes** de instalarla, respalda el `smb.conf` actual, reinicia los servicios y abre el firewall. |
 | 🛡 **UFW** | Muestra el estado del firewall UFW y su regla para Samba. |
 | 🔍 **SCAN NETWORK** | Descubre los equipos de tu red local (IP, nombre, MAC, fabricante y tipo posible). |
 | 🌐 **WINDOWS NETWORK** | La conectividad completa con el equipo Windows en un solo informe: ruta, ping, puerto TCP 445 y puerto TCP 139. |
