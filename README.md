@@ -24,15 +24,69 @@ acción reporta éxito si un paso intermedio falló.
   usarlas y no se guardan en claro en ningún archivo.
 - Probado en MX Linux 23 (KDE, SysVinit) y en Debian 13 (WSL).
 
+## El modelo: una máquina se administra; a las demás se visita
+
+La aplicación tiene dos mitades con una frontera clara:
+
+- **Mitad servidor** (HOME, FILE, CONTROL, el SERVER de USER y
+  SETTINGS): administra Samba en **este** equipo — sus carpetas,
+  sus usuarios, su configuración. Es la única mitad con
+  autoridad, y esa autoridad termina en esta máquina.
+- **Mitad cliente** (el CLIENT de USER): visita los servidores
+  de los demás. Entra como invitada, con el usuario y la
+  contraseña de la otra máquina, monta sus recursos y se va.
+  Nunca crea recursos ni cambia nada en un equipo ajeno: un
+  recurso compartido nace siempre en la máquina dueña de la
+  carpeta, y es allí donde se crea.
+
+### Cómo conecta el cliente
+
+1. **SCAN** — *¿quién hay en la red?* Barre tus subredes y
+   lista **todas** las máquinas vivas (también teléfonos e
+   impresoras). No lee el campo Server: ese campo es el
+   *destinatario* de las demás acciones y se rellena al pulsar
+   una fila del escaneo, tecleando la IP o el nombre a mano, o
+   cargando una conexión guardada.
+2. **LIST SHARES** — *¿qué ofreces?* Pregunta al equipo
+   elegido qué recursos comparte, con tus credenciales de ese
+   equipo. La que responde con recursos, esa es un servidor.
+3. **CONNECT** — monta el recurso elegido en tu sesión, sin
+   privilegios (vía GVfs, desde la propia aplicación). La
+   contraseña se teclea al momento y nunca se guarda; las
+   conexiones guardadas recuerdan servidor y recurso, jamás
+   la contraseña.
+
+Los dos escaneos de la aplicación no son el mismo. El del
+cliente corre **sin privilegios**, como corresponde a
+explorar, y por eso es el más lento: pregunta también por los
+puertos SMB (139/445) porque un equipo Windows ignora el
+ping y, sin esa sonda, no se le vería. El **SCAN NETWORK** de
+CONTROL pide autorización de administrador una vez y descubre
+por ARP: al instante y con MAC y fabricante — esa tabla
+completa solo es posible con privilegio.
+
+### SETTINGS: la memoria, no las manos
+
+Las demás pestañas operan; SETTINGS recuerda. Ahí viven los
+valores permanentes, guardados en la configuración de la
+aplicación: el **grupo de trabajo** (que al aplicarse se
+escribe en el `/etc/samba/smb.conf` de este equipo), la **IP
+del equipo Windows de referencia** (la que CONTROL usa en sus
+pruebas; **PICK** la elige desde un escaneo en vez de
+teclearla) y la tarjeta **DEPENDENCIES**. Los campos de las
+demás pestañas — el servidor del cliente, el usuario, el
+recurso elegido — son campos de trabajo: cambian en cada uso
+y no se guardan.
+
 ## Las pestañas
 
 | Pestaña | Qué contiene |
 |---|---|
 | **HOME** | El estado de un vistazo: servicios `smbd`/`nmbd`, carpeta en uso, red y firewall, con los controles para iniciar, reiniciar y apagar los servicios Samba. |
-| **FILE** | Tus carpetas compartidas: elegir una carpeta existente o crearla, darle nombre de recurso y decidir si se publica. Es la carpeta que HOME anuncia y que el servidor comparte. |
+| **FILE** | Tus carpetas compartidas: elegir una carpeta existente o crearla, darle nombre de recurso y decidir si se publica. Son las carpetas de **este** equipo: FILE no crea recursos en otros equipos. |
 | **CONTROL** | Información y diagnóstico del servidor y de la red (ver la tabla de botones). Casi todo aquí *mira*; la única acción grande es configurar Samba. |
 | **USER** | A la izquierda, **SERVER**: los usuarios Samba (crear, poner contraseña, borrar, verificar). A la derecha, **CLIENT**: buscar equipos en la red, listar sus recursos con tus credenciales, conectar, abrir y desconectar; las conexiones se guardan **sin** la contraseña. |
-| **SETTINGS** | Los valores: grupo de trabajo del servidor e IP del equipo Windows en el cliente (con **PICK**, que escanea la red y te deja elegirla en vez de teclearla). Aquí vive también **DEPENDENCIES**: comprueba cada herramienta que la aplicación necesita y permite instalar las que falten. |
+| **SETTINGS** | Los valores permanentes (ver «SETTINGS: la memoria, no las manos»): grupo de trabajo del servidor e IP del equipo Windows de referencia (con **PICK**, que escanea la red y te deja elegirla en vez de teclearla). Aquí vive también **DEPENDENCIES**: comprueba cada herramienta que la aplicación necesita y permite instalar las que falten. |
 | **HELP** | La guía de uso dentro de la propia aplicación, pestaña por pestaña. |
 
 ### Los botones de CONTROL

@@ -1052,6 +1052,49 @@ void UserPage::on_delete_user()
  * ------------------------------------------------------------
  */
 
+// Nombre NetBIOS real de un equipo, preguntado
+// a la propia IP con nmblookup -A (viene con
+// Samba, paquete samba-common-bin, el mismo de
+// smbpasswd y testparm). nmblookup contesta con
+// una tabla de nombres; el nombre de la máquina
+// es el registro <00> único (no de grupo): la
+// primera columna de esa línea. Sin respuesta —
+// equipo sin NetBIOS — devuelve vacío y quien
+// llama deja la fila como nmap la reportó.
+static std::string netbios_name_for(
+    const std::string& ip)
+{
+    int rc = -1;
+    const std::string output = execute_command(
+        "nmblookup -A " + shell_escape(ip), &rc);
+
+    if (rc != 0)
+        return "";
+
+    std::istringstream lines(output);
+    std::string line;
+
+    while (std::getline(lines, line))
+    {
+        if (line.find("<00>") == std::string::npos)
+            continue;
+
+        if (line.find("<GROUP>") != std::string::npos)
+            continue;
+
+        std::istringstream fields(trim(line));
+        std::string name;
+
+        if (!(fields >> name))
+            continue;
+
+        return name;
+    }
+
+    return "";
+}
+
+
 void UserPage::on_scan()
 {
     if (scan_busy_)
@@ -1068,6 +1111,21 @@ void UserPage::on_scan()
             "[CLIENT] [FALTA] nmap is not installed — "
             "SETTINGS > DEPENDENCIES can install it.");
         return;
+    }
+
+    // nmblookup viene con Samba (samba-common-bin,
+    // el mismo paquete de smbpasswd y testparm): si
+    // falta, el escaneo sigue con los nombres de
+    // nmap y nadie se cae por no tener nombre.
+    const bool have_nmblookup =
+        command_exists("nmblookup");
+
+    if (!have_nmblookup)
+    {
+        log_line(
+            "[CLIENT] [FALTA] nmblookup is not "
+            "installed (package: samba-common-bin) — "
+            "hosts keep the names nmap reports.");
     }
 
     int ip_rc = -1;
@@ -1174,12 +1232,21 @@ void UserPage::on_scan()
         "window stays usable...");
 
     scan_thread_ = std::thread(
-        [this, subnets]() {
+        [this, subnets, have_nmblookup]() {
             for (const auto& subnet : subnets)
             {
+                // Sondas TCP a 139/445 además del
+                // ping: un Windows de fábrica ignora
+                // el ping y no tiene 80/443, así que
+                // "nmap -sn" a secas no lo ve
+                // (verificado en campo el 2026-11-06
+                // contra la Surface: -sn = 0 hosts,
+                // -PS445 = 1 host). Como esto es un
+                // cliente Samba, el 445 es la puerta
+                // que importa.
                 const std::string output =
                     execute_command(
-                        "nmap -sn " +
+                        "nmap -sn -PS139,445 " +
                         shell_escape(subnet));
 
                 std::istringstream scan_lines(output);
@@ -1193,11 +1260,51 @@ void UserPage::on_scan()
                     if (scan_line.rfind(prefix, 0) != 0)
                         continue;
 
-                    const std::string host = trim(
+                    std::string host = trim(
                         scan_line.substr(prefix.size()));
 
-                    if (!host.empty())
-                        scan_results_.push_back(host);
+                    if (host.empty())
+                        continue;
+
+                    // La IP es lo que va entre
+                    // paréntesis cuando nmap pone
+                    // nombre, o la línea entera
+                    // cuando solo reporta la IP.
+                    std::string ip = host;
+                    std::string shown = host;
+
+                    const auto open = host.find('(');
+                    const auto close = host.rfind(')');
+
+                    if (open != std::string::npos &&
+                        close != std::string::npos &&
+                        close > open)
+                    {
+                        ip = trim(host.substr(
+                            open + 1, close - open - 1));
+                        shown = trim(
+                            host.substr(0, open));
+                    }
+
+                    // Nombre NetBIOS real, no la
+                    // conjetura de nmap: si el equipo
+                    // responde, su nombre encabeza la
+                    // fila; si no responde (Linux sin
+                    // Samba, teléfono), la fila queda
+                    // como nmap la reportó.
+                    if (have_nmblookup)
+                    {
+                        const std::string netbios =
+                            netbios_name_for(ip);
+
+                        if (!netbios.empty() &&
+                            netbios != shown)
+                        {
+                            host = netbios + " (" + ip + ")";
+                        }
+                    }
+
+                    scan_results_.push_back(host);
                 }
             }
 
