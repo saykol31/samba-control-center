@@ -264,8 +264,10 @@ SettingsPage::dependency_table()
  * ------------------------------------------------------------
  */
 
-SettingsPage::SettingsPage()
-    : Gtk::Box(Gtk::Orientation::VERTICAL, 0)
+SettingsPage::SettingsPage(
+    SharedStatus& shared_status)
+    : Gtk::Box(Gtk::Orientation::VERTICAL, 0),
+      shared_status_(shared_status)
 {
     install_signal_.connect(
         sigc::mem_fun(
@@ -549,6 +551,28 @@ SettingsPage::missing_dependencies() const
 }
 
 
+void SettingsPage::publish_shared_status(
+    Gtk::Label& label, bool present)
+{
+    // El mismo formato que usa CONTROL en sus
+    // etiquetas compartidas (set_status): símbolo y
+    // color, y el mismo veredicto — INSTALADO o
+    // FALTA — para que HOME diga lo mismo lo
+    // escriba quien lo escriba.
+    const std::string color =
+        present ? "green" : "red";
+    const std::string symbol =
+        present ? "✓" : "✗";
+    const std::string text =
+        present ? "INSTALADO" : "FALTA";
+
+    label.set_markup(
+        "<span foreground='" + color +
+        "' weight='bold'>" + symbol + " " +
+        text + "</span>");
+}
+
+
 void SettingsPage::refresh_dependencies()
 {
     int satisfied = 0;
@@ -566,6 +590,22 @@ void SettingsPage::refresh_dependencies()
 
         if (present)
             ++satisfied;
+
+        // Publicar en el estado compartido las dos
+        // filas que HOME muestra (Samba y tcpdump):
+        // esta tarjeta es quien comprueba las
+        // dependencias, así que es quien debe contar
+        // el resultado. Antes esas etiquetas solo
+        // las escribía el FULL DIAGNOSTIC de CONTROL
+        // y HOME se quedaba en "Pendiente de
+        // comprobación" aunque aquí ya se hubiera
+        // comprobado.
+        if (std::string(dep.command) == "smbd")
+            publish_shared_status(
+                shared_status_.samba(), present);
+        else if (std::string(dep.command) == "tcpdump")
+            publish_shared_status(
+                shared_status_.tcpdump(), present);
 
         // El marcador se inserta con su etiqueta de color;
         // el resto de la línea va en texto plano.

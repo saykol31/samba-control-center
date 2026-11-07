@@ -58,7 +58,7 @@ MainWindow::MainWindow() {
     );
 
     auto* settings_page =
-        Gtk::make_managed<SettingsPage>();
+        Gtk::make_managed<SettingsPage>(shared_status);
 
     // El PICK de SETTINGS acciona el selector CONFIG WIN
     // del panel de CONTROL: una sola implementación de

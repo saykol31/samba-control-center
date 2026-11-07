@@ -5,6 +5,8 @@
 #include <thread>
 #include <vector>
 
+#include "shared_status.hpp"
+
 /*
  * ================================================================
  * PÁGINA SETTINGS — VALORES, NO ACCIONES
@@ -33,7 +35,7 @@
 
 class SettingsPage : public Gtk::Box {
 public:
-    SettingsPage();
+    explicit SettingsPage(SharedStatus& shared_status);
     ~SettingsPage();
 
     // El botón PICK no busca por su cuenta: emite esta señal
@@ -67,6 +69,14 @@ private:
     Gtk::Entry windows_ip_entry_;
     Gtk::Entry client_user_entry_;
     Gtk::Label values_status_;
+
+    // Estado compartido con HOME: al comprobar las
+    // dependencias, esta página publica los dos
+    // veredictos que la tarjeta de HOME muestra
+    // (Samba y tcpdump).
+    SharedStatus& shared_status_;
+    void publish_shared_status(
+        Gtk::Label& label, bool present);
 
     Gtk::TextView deps_view_;
     Gtk::Label deps_summary_;
